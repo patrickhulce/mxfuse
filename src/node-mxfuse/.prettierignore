@@ -1,0 +1,4 @@
+dist
+binding.js
+binding.d.ts
+*.node

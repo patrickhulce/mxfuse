@@ -1,0 +1,11 @@
+{
+  "name": "mxfuse-root",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Polyglot bindings for mxfuse",
+  "license": "MIT",
+  "scripts": {
+    "build:node": "pnpm --dir src/node-mxfuse build",
+    "build": "pnpm build:node"
+  }
+}

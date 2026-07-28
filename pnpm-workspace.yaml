@@ -1,0 +1,4 @@
+packages:
+  - src/node-mxfuse
+allowBuilds:
+  esbuild: true

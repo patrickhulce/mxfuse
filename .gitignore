@@ -1,0 +1,9 @@
+/target/
+node_modules/
+src/python-mxfuse/.venv/
+*.node
+*.so
+*.pyc
+dist/
+src/node-mxfuse/binding.js
+src/node-mxfuse/binding.d.ts

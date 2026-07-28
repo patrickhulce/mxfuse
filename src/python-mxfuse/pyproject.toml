@@ -1,0 +1,44 @@
+[project]
+name = "mxfuse"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "mxfuse._mxfuse"
+python-source = "."
+manifest-path = "Cargo.toml"
+
+[dependency-groups]
+dev = [
+    "maturin>=1.7,<2.0",
+    "mypy>=1.0",
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+
+[[tool.mypy.overrides]]
+module = "mxfuse._mxfuse"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
