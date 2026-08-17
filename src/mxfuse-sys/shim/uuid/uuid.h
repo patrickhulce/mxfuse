@@ -5,7 +5,9 @@
 extern "C" {
 #endif
 
-void uuid_generate(unsigned char out[16]);
+typedef unsigned char uuid_t[16];
+
+void uuid_generate(uuid_t out);
 
 #ifdef __cplusplus
 }
