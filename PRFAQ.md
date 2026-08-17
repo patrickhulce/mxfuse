@@ -1,15 +1,26 @@
 # `mxfuse`
 
-Today we're proud to release `mxfuse`, a rust-python-node library that enables effortless MXF creation and consumption. Built on top of the bmx C++ reference implementation, `mxfuse` enables low-level access to MXF encoding details, private image codecs, and async streaming benefits all while conforming to the MXF specification and each language's respective conventions. With `mxfuse`, you can extract just a single frame of a remote S3 500GB IMF by reading only a few MB. With `mxfuse`, you can encode a clip in your company's proprietary image compression codec without heavy-handed C++ implementations or resorting to a fork of bmx. With `mxfuse`, you can stream the results of an unreadable container to ffplay and visualize complex image data in real-time.
+Today we're proud to release `mxfuse`, a rust-python-node library that enables effortless MXF creation and consumption. Built on top of the [bmx](https://github.com/ebu/bmx) C++ reference implementation, `mxfuse` gives each language a conventional, low-level handle on MXF structure — partitions, index tables, essence container ULs, and raw frame payloads — without asking you to write C++.
+
+With `mxfuse`, you can extract a single frame of a remote 500 GB IMF by reading only a few MB. 
+With `mxfuse`, you can wrap a clip in your company's proprietary image codec. 
+With `mxfuse`, you can stream a well-formed OP1a file to ffplay in a single pass.
+
 
 ## Limitations
 
-- OP1A Only
-- Frame-Wrapped Only
+- **OP1a, frame-wrapped only** for v1. No AS-02, RDD 9, D-10, Avid OP-Atom, or clip wrapping as a write target.
+- **Essence in, essence out.** No image codec decode or encode. A "frame" is the KLV payload with the key and length stripped.
+- **Synchronous core.** One reader per thread. Sharing a single reader across threads requires external locking; bmx mutates position, frame buffers, and index caches on every `Read()`.
+- **Single-pass streamable write** (`Flavour.SINGLE_PASS`) requires a known duration, a constant-bytes-per-element codec, partition interval 0, and no timed text. JPEG 2000 and ProRes are typically variable-frame-size and will not produce a closed-complete header in one pass.
+- **`WAVE_PCM` is pinned to 48 kHz** in OP1a.
+- **Clip-wrapped essence without a complete index table** needs a constant edit unit size that bmx already recognizes (DV, uncompressed, VC-3, WAVE PCM). Unknown codecs in that configuration will not read.
+- **`cargo add mxfuse` needs CMake and a C++ toolchain.** Wheels and napi prebuilds are the supported path and statically link the bmx stack (bmx, libMXF, libMXF++, expat, uriparser). On Linux the C++ runtime stays dynamic — `libstdc++.so.6` and `libgcc_s.so.1` are on the manylinux allowlist. A source build does not need `git`, network access at configure time, or `uuid-dev`: those dependencies are vendored or replaced by a shim-provided `uuid_generate`.
+- **bmx and libMXF are BSD-3-Clause.** `mxfuse` is MIT; the combined binary carries both.
 
 ## Usage
 
-Getting started is easy, `mxfuse` is a single package available via the cargo, npm, and pypi package registries.
+Getting started is easy. `mxfuse` is a single package available via the cargo, npm, and pypi package registries.
 
 ```bash
 cargo add mxfuse
@@ -22,58 +33,147 @@ uv add mxfuse
 #### Read an MXF File
 
 ```python
-from mxfuse import demux, ContainerMetadata, TrackMetadata, DemuxOptions, DecodeMode
+from mxfuse import open_mxf, ReadOptions, TrackKind
 
-options = DemuxOptions(
-    frame_buffer=8,
-    decode_mode=DecodeMode.RAW,
-)
+options = ReadOptions(read_ahead=1 << 20, cache_bytes=64 << 20)
 
-with open("input.mxf") as f:
-    # Parse the initial structure of the container
-    container = demux(src=f, options=options)
-    assert isinstance(container.metadata, ContainerMetadata)
+with open("input.mxf", "rb") as f:
+    with open_mxf(f, options=options) as clip:
+        print(clip.edit_rate, clip.duration)
 
-    # Inspect the different available tracks
-    for track in container.tracks:
-        assert isinstance(track.metadata, TrackMetadata)
-        
-    # Use the frames generator to only read the bytes off `f` that we need
-    for frame in container.frames:
-        # Read the essence for each track associated with the frame
-        for content in frame.read(container.tracks)
-            assert isinstance(content, (TrackContentPicture,TrackContentAudio,TrackContentSystem,TrackContentData))
-            assert isinstance(content.ul, bytes)
-            assert isinstance(content.data, bytes)
+        for track in clip.tracks:
+            print(track.index, track.kind, track.essence_type, track.essence_container_ul)
+
+        # Must precede reading: unselected tracks are never fetched.
+        clip.select(t for t in clip.tracks if t.kind is TrackKind.PICTURE)
+
+        clip.seek(1000)
+        for package in clip.read(count=1):
+            for frame in package.frames:
+                frame.data            # essence payload, KL stripped
+                frame.element_key     # KLV key
+                frame.file_position   # for building an offset map
 ```
+
+A custom byte source — an S3 range-reader, an HTTP client, a memory buffer — is any object that implements `read`, `seek`, `tell`, and `size` (regular files may omit `size`; it is inferred via `seek(0, 2)`). `open_mxf` wraps it in libMXF's `MXFFile` vtable — eleven function pointers, of which `read`/`seek`/`tell`/`size` are the ones a source must implement — and hands it to `MXFFileReader::Open`. Tune `read_ahead` and `cache_bytes`: without them, index-driven access issues one tiny KLV-header read after another (a 20 MB probe issued 1020 reads to fetch 2.5 MB).
+
+`frame.file_position` for frame-wrapped essence points at the KLV, with `kl_size` giving the header length. Clip-wrapped essence points at the sample data and `kl_size` is 0.
 
 #### Write an MXF File
 
-```python
-from mxfuse import mux, ContainerMetadata, MXFrame, MXFChunk
-
-
-def mxf_writer() -> Generator[MXFChunk]:
-    # Write the important container-wide metadata
-    yield ContainerMetadata(fps=...)
-
-    # Write each frame out
-    for image, audio, metadata in zip(frames, audios, timeline):
-        yield TrackContentPicture.from_essence(data=image)
-        yield TrackContentAudio.from_pcm(samples=audio)
-        yield TrackContentData.from_essence(data=metadata)
-
-with open("output.mxf") as f:
-    mux(src=mxf_writer, dst=f)
-
-```
-
-#### 1:1 BMX API
+bmx requires every track to be created, then `PrepareWrite()`, then `WriteSamples(track_index, ...)` in lockstep. Duration for a streamable file must be declared before the first sample. A generator that yields container metadata mid-stream does not map onto that lifecycle.
 
 ```python
-from mxfuse import mxf2raw, raw2mxf
-from mxfuse.bmx import BMXMetadata
+from mxfuse import ClipSpec, TrackSpec, EssenceType, Flavour, write_mxf
 
-raw_iterator = mxf2raw(open('path/to/file'))
-mxf_byte_chunk_iterator = raw2mxf(raw_iterator, metadata=BMXMetadata())
+spec = ClipSpec(
+    edit_rate=(24000, 1001),
+    flavour=Flavour.SINGLE_PASS,   # streamable; requires duration
+    duration=len(images),
+    tracks=[
+        TrackSpec(EssenceType.UNC_HD_1080P),
+        TrackSpec(EssenceType.WAVE_PCM, sampling_rate=48000),
+    ],
+)
+
+with open("output.mxf", "wb") as f, write_mxf(f, spec) as clip:
+    for image, audio in zip(images, audios):
+        clip.write(0, image)
+        clip.write(1, audio)
 ```
+
+`Flavour.SINGLE_PASS` writes a closed-complete header up front and never seeks backward, so the destination can be a pipe or any other non-seekable sink. Write fewer or more samples than `duration` and `CompleteWrite` fails. Omit the flavour (or pick a variable-frame-size codec) and the writer will seek back to finish the header — fine for a regular file, fatal for a pipe.
+
+#### Write a private codec
+
+Reading a proprietary essence type needs no patch: unrecognized picture/sound/data degrades to a generic type and the frame bytes come through unchanged. Writing one is the reason `mxfuse` vendors a patched bmx. The patch adds `EssenceType.OPAQUE_PICTURE` (and matching sound/data variants) so you supply the container UL and picture coding UL yourself:
+
+```python
+from mxfuse import ClipSpec, TrackSpec, EssenceType, write_mxf
+
+spec = ClipSpec(
+    edit_rate=(24, 1),
+    duration=len(images),
+    tracks=[
+        TrackSpec(
+            EssenceType.OPAQUE_PICTURE,
+            essence_container_ul=bytes.fromhex("060e2b34..."),
+            picture_coding_ul=bytes.fromhex("060e2b34..."),
+            stored_width=4096,
+            stored_height=2160,
+        ),
+    ],
+)
+
+with open("output.mxf", "wb") as f, write_mxf(f, spec) as clip:
+    for image in images:
+        clip.write(0, image)
+```
+
+You do not fork bmx. The opaque type lives in `mxfuse`'s tracked patch set; prebuilt artifacts already include it.
+
+#### 1:1 bmx surface
+
+`mxfuse.bmx` is a thin binding over the real C++ classes — not the `mxf2raw` / `raw2bmx` command-line apps, and not a fictional `BMXMetadata` type. Use it when the high-level `open_mxf` / `write_mxf` façade hides a knob you need (`SetReadLimits`, `GetHeaderMetadata`, flavour flags, descriptor mutation between `PrepareHeaderMetadata` and `PrepareWrite`).
+
+```python
+from mxfuse.bmx import MXFFileReader, ClipWriter, EssenceType, HeaderMetadata
+
+reader = MXFFileReader.open(path)
+print(reader.edit_rate, reader.duration, reader.num_track_readers)
+reader.set_read_limits()
+reader.seek(0)
+while True:
+    n = reader.read(1)
+    if n == 0:
+        break
+    track = reader.track_reader(0)
+    frame = track.frame_buffer.last_frame(pop=True)
+    if frame is not None and not frame.is_empty:
+        consume(frame.bytes, frame.size)
+
+writer = ClipWriter.open_new_op1a(flavour=0, file=out, frame_rate=(24, 1))
+writer.create_track(EssenceType.UNC_HD_1080P)
+writer.create_track(EssenceType.WAVE_PCM)
+writer.prepare_write()
+# ... WriteSamples per track, then CompleteWrite
+header: HeaderMetadata = writer.header_metadata
+```
+
+## FAQ
+
+### Why bmx rather than FFmpeg or a pure-Rust MXF implementation?
+
+bmx exists to produce and consume specification-compliant MXF, including IMF essence components. It already resolves the material-package → file-source-package → essence-container chain, normalizes edit rates across video and audio, and exposes index-driven random access. FFmpeg treats MXF as one more container and will not give you private-UL write, descriptor-level mutation, or a first-class custom byte source. A from-scratch Rust MXF stack would reimplement the bulk of what bmx's C++ layer adds on top of libMXF — years of work — to reach the same place. Wrapping bmx is the shortest path to a correct file.
+
+### How does a remote or S3 source work?
+
+libMXF's `MXFFile` is a C vtable of eleven function pointers (`close`, `read`, `write`, `get_char`, `put_char`, `eof`, `seek`, `tell`, `is_seekable`, `size`, `free_sys_data`). An S3 range-reader (or any other byte source) implements the read-side slots and plugs in directly, and bmx's index-driven reader seeks to the requested edit unit instead of scanning from the top. `open_mxf` wraps your handle in that vtable and hands it to `MXFFileReader::Open`.
+
+### How do private codecs work if bmx has a closed catalogue?
+
+Reading unknown essence already works unpatched — bmx degrades it to generic picture/sound/data and still returns the raw bytes. Writing it is the part bmx cannot do out of the box: `EssenceType` is a closed enum and `OP1ATrack::Create` is a hardcoded switch. `mxfuse` vendors bmx as a submodule plus a small tracked patch set under `patches/` that adds one opaque essence type; you consume a prebuilt wheel or napi binary and never fork. The patch is intended for upstream to `ebu/bmx`.
+
+### How is the vendored patch set kept current?
+
+bmx lives as a git submodule pinned to a known commit. The opaque-essence patch is a small, tracked set of diffs under `patches/` (enum value, descriptor helper, OP1a track class, factory switch, CMake). CI rebases the patch onto upstream `main` and fails the build if it no longer applies. The intent is to upstream the opaque type to `ebu/bmx` and then delete the patch.
+
+### What does "async" actually mean if the core is synchronous?
+
+bmx itself is synchronous and has no internal locking. `mxfuse` is async-friendly, not async-native: blocking bmx calls run on a thread pool, and the byte-source callback bridges to your async fetcher. libMXF's `read` callback is `uint32_t (*read)(MXFFileSysData*, uint8_t*, uint32_t)` — you cannot `await` inside it. When bmx asks for bytes, the callback blocks that worker until your async fetcher (S3, HTTP, a pipe) completes and copies into the provided buffer. From Python/Node/Rust async code this looks like `await clip.read(...)`; from bmx's point of view it is a normal synchronous read. Do not share one reader across tasks.
+
+### Does mxfuse decode images?
+
+No. Essence goes in and essence comes out. bmx has bitstream parsers, not image decoders, so `mxfuse` will not turn JPEG 2000 or ProRes into pixels. A "frame" is the KLV payload with the key and length stripped.
+
+### How is `BMXException` kept from unwinding across FFI?
+
+`Open()` returns an error code. Almost everything else (`Read`, `Seek`, `SetReadLimits`, `WriteSamples`, `CompleteWrite`) throws `BMXException`. Unwinding across the Rust/C++ boundary is undefined behavior. Every shim entry point is wrapped in `try`/`catch(...)` and converted to a Rust `Error` (and from there to `NotImplementedError` / a JS exception / a Rust `Result`). There is no `extern "C"` surface in bmx, so the shim is hand-written C++ compiled with `cc`/`cxx`, not `bindgen`.
+
+### Why does file ownership matter for a custom byte source?
+
+`MXFFileReader` and `OP1AFile` take ownership of the `mxfpp::File*` you pass in and `delete` it in the destructor, which closes the underlying `MXFFile` and calls your `close` / `free_sys_data`. The high-level `open_mxf` / `write_mxf` API hides this: the Python/Node/Rust handle stays alive for the lifetime of the clip, and dropping the clip is what closes the source. If you use `mxfuse.bmx` directly, do not also close or free the file you handed over.
+
+### What is the performance story for a 500 GB remote file?
+
+bmx is index-driven. Seeking to an edit unit and reading it touches the header, the index, and the essence KLV for the selected tracks — not the rest of the file. A local 20 MB probe seeking to frame 10 and reading 3 edit units fetched 2.5 MB across 1020 individual reads; the 1020 is the thing to amortize. Set `read_ahead` (so a short read pulls a window, the way bmx's own HTTP reader does) and `cache_bytes` (paged LRU via `mxf_cache_file_open`). Disable every track you do not need *before* `read`. With those two knobs, a single frame of a 500 GB IMF is a handful of range requests totaling a few MB.
