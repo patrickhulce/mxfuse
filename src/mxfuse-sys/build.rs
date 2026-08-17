@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let bmx_src = manifest_dir
-        .join("../../vendor/bmx")
-        .canonicalize()
+    let bmx_src = dunce::canonicalize(manifest_dir.join("../../vendor/bmx"))
         .expect("vendor/bmx is missing; see vendor/README.md");
 
     println!("cargo:rerun-if-changed=shim/mxfuse_shim.cpp");
