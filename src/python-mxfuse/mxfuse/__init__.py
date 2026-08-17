@@ -1,27 +1,23 @@
 """Public Python API for mxfuse."""
 
 from mxfuse._core import (
-    BinarySink,
     BinarySource,
-    Container,
-    DecodeMode,
+    Clip,
     Frame,
-    FrameKind,
-    Metadata,
+    Package,
+    ReadOptions,
     Track,
-    decode,
-    encode,
+    TrackKind,
+    open_mxf,
 )
 
 __all__ = [
-    "BinarySink",
     "BinarySource",
-    "Container",
-    "DecodeMode",
+    "Clip",
     "Frame",
-    "FrameKind",
-    "Metadata",
+    "Package",
+    "ReadOptions",
     "Track",
-    "decode",
-    "encode",
+    "TrackKind",
+    "open_mxf",
 ]
