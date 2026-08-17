@@ -1,0 +1,11 @@
+.form-horizontal .control-label {
+  text-align:left !important;
+}
+
+.form-horizontal .form-control {
+  width:auto;
+}
+
+.doc-references {
+  font-size: small;
+}
