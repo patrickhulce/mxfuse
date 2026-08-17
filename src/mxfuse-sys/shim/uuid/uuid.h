@@ -1,6 +1,8 @@
 #ifndef MXFUSE_UUID_STUB_H
 #define MXFUSE_UUID_STUB_H
 
+#include <time.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
