@@ -7,3 +7,5 @@ src/python-mxfuse/.venv/
 dist/
 src/node-mxfuse/binding.js
 src/node-mxfuse/binding.d.ts
+src/node-mxfuse/npm/**/*.node
+.DS_Store

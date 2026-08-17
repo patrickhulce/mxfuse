@@ -1,4 +1,4 @@
-.PHONY: all build lint typecheck test \
+.PHONY: all build lint typecheck test fixtures \
         build-rust build-python build-node \
         lint-rust lint-python lint-node \
         typecheck-python typecheck-node \
@@ -21,7 +21,7 @@ lint: lint-rust lint-python lint-node
 
 lint-rust:
 	cargo fmt --all -- --check
-	cargo clippy -p mxfuse -p mxfuse_node_bindings -- -D warnings
+	cargo clippy -p mxfuse-sys -p mxfuse -p mxfuse_node_bindings -- -D warnings
 
 lint-python:
 	cd src/python-mxfuse && uv run ruff check .
@@ -48,3 +48,8 @@ test-python: build-python
 
 test-node: build-node
 	pnpm --dir src/node-mxfuse test
+
+fixtures: tests/fixtures/sample_op1a.mxf
+
+tests/fixtures/sample_op1a.mxf:
+	./scripts/generate-fixture.sh

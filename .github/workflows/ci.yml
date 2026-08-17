@@ -7,26 +7,56 @@ on:
 
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ pkg-config
+      - name: Generate fixture
+        run: |
+          chmod +x scripts/generate-fixture.sh
+          ./scripts/generate-fixture.sh
       - run: make lint-rust test-rust
 
   python:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate fixture
+        run: ./scripts/generate-fixture.sh
+        shell: bash
       - run: make build-python lint-python typecheck-python test-python
 
   node:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -36,5 +66,16 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - uses: Swatinem/rust-cache@v2
       - run: pnpm install
+      - name: Generate fixture
+        run: ./scripts/generate-fixture.sh
+        shell: bash
       - run: make build-node lint-node typecheck-node test-node
+      - name: Check linkage
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          chmod +x scripts/check-linkage.sh
+          node_bin="$(find src/node-mxfuse -maxdepth 1 -name '*.node' | head -n 1)"
+          ./scripts/check-linkage.sh "$node_bin"

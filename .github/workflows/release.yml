@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  python-wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            manylinux: "2_28"
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            manylinux: "2_28"
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            manylinux: ""
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            manylinux: ""
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            manylinux: ""
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: PyO3/maturin-action@v1
+        with:
+          maturin-version: v1.14.1
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --locked --compatibility pypi -i python3.10 --manifest-path src/python-mxfuse/Cargo.toml
+      - name: auditwheel show
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m pip install auditwheel
+          auditwheel show src/python-mxfuse/target/wheels/*.whl || auditwheel show target/wheels/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: |
+            src/python-mxfuse/target/wheels/*.whl
+            target/wheels/*.whl
+
+  node-addons:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    defaults:
+      run:
+        working-directory: src/node-mxfuse
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: pnpm install --dir ../..
+      - run: pnpm exec napi build --cargo-name mxfuse_node_bindings --platform --release --target ${{ matrix.target }} --js binding.js --dts binding.d.ts
+      - name: Check linkage
+        if: runner.os != 'Windows'
+        working-directory: ${{ github.workspace }}
+        run: |
+          chmod +x scripts/check-linkage.sh
+          node_bin="$(find src/node-mxfuse -maxdepth 1 -name '*.node' | head -n 1)"
+          ./scripts/check-linkage.sh "$node_bin"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: napi-${{ matrix.target }}
+          path: src/node-mxfuse/*.node
+
+  node-package:
+    needs: node-addons
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: napi-*
+      - working-directory: src/node-mxfuse
+        run: |
+          pnpm exec napi create-npm-dirs
+          pnpm exec napi artifacts --output-dir ../../artifacts --npm-dir npm
+      - run: chmod +x scripts/check-napi-artifacts.sh && ./scripts/check-napi-artifacts.sh
