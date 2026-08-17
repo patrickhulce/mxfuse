@@ -8,8 +8,7 @@
   "files": [
     "dist",
     "binding.js",
-    "binding.d.ts",
-    "*.node"
+    "binding.d.ts"
   ],
   "scripts": {
     "build:native": "napi build --cargo-name mxfuse_node_bindings --platform --release --js binding.js --dts binding.d.ts",
@@ -20,7 +19,16 @@
     "lint": "eslint . && prettier --check .",
     "lint:fix": "eslint --fix . && prettier --write .",
     "format": "prettier --write .",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "artifacts:check": "../../scripts/check-napi-artifacts.sh",
+    "prepublishOnly": "napi prepublish -t npm && pnpm run artifacts:check"
+  },
+  "optionalDependencies": {
+    "mxfuse-darwin-arm64": "0.1.0",
+    "mxfuse-darwin-x64": "0.1.0",
+    "mxfuse-linux-x64-gnu": "0.1.0",
+    "mxfuse-linux-arm64-gnu": "0.1.0",
+    "mxfuse-win32-x64-msvc": "0.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
@@ -34,6 +42,25 @@
     "typescript-eslint": "^8.18.2"
   },
   "napi": {
-    "name": "mxfuse-napi-name"
+    "name": "mxfuse",
+    "binaryName": "mxfuse",
+    "packageName": "mxfuse",
+    "triples": {
+      "defaults": false,
+      "additional": [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu"
+      ]
+    },
+    "targets": [
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu"
+    ]
   }
 }

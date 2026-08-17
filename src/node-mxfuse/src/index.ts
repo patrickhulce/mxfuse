@@ -1,85 +1,144 @@
+import { readFile } from "node:fs/promises";
+
 import {
-  decodeScaffold as decodeNative,
-  encodeScaffold as encodeNative,
+  NativeClip,
+  openMxfFromBuffer,
+  openMxfFromPath,
+  type NativeReadOptions,
 } from "../binding.js";
 
-export type DecodeMode = "raw" | "parsed";
-export type FrameKind = "raw_essence" | "pixels";
+export type TrackKind = "picture" | "sound" | "data" | "other";
 
-/** An open-like source, including adapters backed by remote object stores. */
-export interface BinarySource {
-  read(size?: number): Uint8Array | Promise<Uint8Array>;
-  seek?(offset: number, whence?: number): number | Promise<number>;
-  tell?(): number | Promise<number>;
+/** An open-like source. Path strings and in-memory buffers are opened natively. */
+export interface ByteSource {
+  read(size?: number): Promise<Uint8Array> | Uint8Array;
+  seek(offset: number, whence?: number): Promise<number> | number;
+  tell(): Promise<number> | number;
+  size(): Promise<number> | number;
 }
 
-/** An open-like destination, including adapters backed by remote object stores. */
-export interface BinarySink {
-  write(data: Uint8Array): number | Promise<number>;
-  seek?(offset: number, whence?: number): number | Promise<number>;
-  tell?(): number | Promise<number>;
+export interface ReadOptions {
+  readAhead?: number;
+  cacheBytes?: number;
 }
 
-export class Metadata {
-  public constructor(
-    public readonly values: Readonly<Record<string, string>> = {},
-  ) {}
+export interface Track {
+  index: number;
+  kind: TrackKind;
+  essenceType: string;
+  essenceContainerUl: Uint8Array;
+  editRate: readonly [number, number];
+  duration: number;
 }
 
-export class Frame {
-  public constructor(
-    public readonly kind: FrameKind,
-    public readonly data: Uint8Array,
-  ) {}
+export interface Frame {
+  data: Uint8Array;
+  elementKey: Uint8Array;
+  filePosition: number;
 }
 
-export class Track {
-  public constructor(
-    public readonly id: number,
-    public readonly codec?: string,
-    public readonly metadata = new Metadata(),
-    private readonly essenceFrames: readonly Frame[] = [],
-  ) {}
+export interface Package {
+  frames: readonly Frame[];
+}
 
-  public *frames(): IterableIterator<Frame> {
-    yield* this.essenceFrames;
+function toNativeOptions(options: ReadOptions = {}): NativeReadOptions {
+  return {
+    readAhead: options.readAhead,
+    cacheBytes: options.cacheBytes,
+  };
+}
+
+/**
+ * An opened MXF clip. One reader per task; do not share across concurrent
+ * async work.
+ */
+export class Clip {
+  public constructor(private readonly native: NativeClip) {}
+
+  public async info(): Promise<{
+    editRate: readonly [number, number];
+    duration: number;
+    tracks: readonly Track[];
+  }> {
+    const info = await this.native.info();
+    return {
+      editRate: [info.editRateNum, info.editRateDen],
+      duration: info.duration,
+      tracks: info.tracks.map((track) => ({
+        index: track.index,
+        kind: track.kind as TrackKind,
+        essenceType: track.essenceType,
+        essenceContainerUl: Uint8Array.from(track.essenceContainerUl),
+        editRate: [track.editRateNum, track.editRateDen],
+        duration: track.duration,
+      })),
+    };
+  }
+
+  public get editRate(): Promise<readonly [number, number]> {
+    return this.info().then((info) => info.editRate);
+  }
+
+  public get duration(): Promise<number> {
+    return this.info().then((info) => info.duration);
+  }
+
+  public get tracks(): Promise<readonly Track[]> {
+    return this.info().then((info) => info.tracks);
+  }
+
+  public async select(tracks: Iterable<Track>): Promise<void> {
+    await this.native.select(Array.from(tracks, (track) => track.index));
+  }
+
+  public async seek(position: number): Promise<void> {
+    await this.native.seek(position);
+  }
+
+  public async read(count = 1): Promise<Package[]> {
+    const packages = await this.native.read(count);
+    return packages.map((package_) => ({
+      frames: package_.frames.map((frame) => ({
+        data: Uint8Array.from(frame.data),
+        elementKey: Uint8Array.from(frame.elementKey),
+        filePosition: frame.filePosition,
+      })),
+    }));
+  }
+
+  public async close(): Promise<void> {
+    await this.native.close();
   }
 }
 
-export class Container {
-  public constructor(
-    public readonly tracks: readonly Track[] = [],
-    public readonly metadata = new Metadata(),
-    public readonly mode: DecodeMode = "raw",
-  ) {}
-
-  public *frames(): IterableIterator<Frame> {
-    for (const track of this.tracks) {
-      yield* track.frames();
-    }
+export async function openMxf(
+  source: string | Uint8Array | ByteSource,
+  options: ReadOptions = {},
+): Promise<Clip> {
+  const nativeOptions = toNativeOptions(options);
+  if (typeof source === "string") {
+    return new Clip(await openMxfFromPath(source, nativeOptions));
   }
+  if (source instanceof Uint8Array) {
+    return new Clip(
+      await openMxfFromBuffer(Buffer.from(source), nativeOptions),
+    );
+  }
+  const size = await source.size();
+  const current = await source.tell();
+  await source.seek(0, 0);
+  const data = await source.read(size);
+  await source.seek(current, 0);
+  return new Clip(await openMxfFromBuffer(Buffer.from(data), nativeOptions));
 }
 
-export interface DecodeOptions {
-  mode?: DecodeMode;
+export async function openMxfFile(
+  path: string,
+  options: ReadOptions = {},
+): Promise<Clip> {
+  return openMxf(path, options);
 }
 
-/** Decode an open-like source into a lazily traversable container. */
-export async function decode(
-  source: BinarySource,
-  options: DecodeOptions = {},
-): Promise<Container> {
-  void source;
-  decodeNative(options.mode ?? "raw");
-  throw new Error("native decoder unexpectedly returned");
-}
-
-/** Encode a container to an open-like destination. */
-export async function encode(
-  container: Container,
-  destination: BinarySink,
-): Promise<void> {
-  void container;
-  void destination;
-  encodeNative();
+export async function readMxfBuffer(path: string): Promise<Uint8Array> {
+  return readFile(path);
 }

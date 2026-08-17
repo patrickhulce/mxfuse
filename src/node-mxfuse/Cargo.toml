@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 mxfuse = { path = "../rust-mxfuse" }
-napi = { version = "2", default-features = false, features = ["napi4"] }
+napi = { version = "2", default-features = false, features = ["napi4", "tokio_rt"] }
 napi-derive = "2"
 
 [build-dependencies]

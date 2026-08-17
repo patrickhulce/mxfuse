@@ -1,32 +1,34 @@
 import * as assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 
-import { Container, Frame, Track, decode, encode } from "../dist/index.js";
+import { openMxf } from "../dist/index.js";
 
-test("container iterates frames", () => {
-  const frames = [
-    new Frame("raw_essence", Buffer.from("one")),
-    new Frame("raw_essence", Buffer.from("two")),
-  ];
-  const container = new Container([
-    new Track(1, "jpeg2000", undefined, frames),
-  ]);
+const fixture = join(
+  process.cwd(),
+  "..",
+  "..",
+  "tests",
+  "fixtures",
+  "sample_op1a.mxf",
+);
 
-  assert.deepEqual([...container.frames()], frames);
-});
-
-test("decode is an explicit scaffold seam", async () => {
-  const source = { read: () => new Uint8Array() };
-  await assert.rejects(
-    decode(source, { mode: "parsed" }),
-    /Decode is not implemented/,
-  );
-});
-
-test("encode is an explicit scaffold seam", async () => {
-  const destination = { write: () => 0 };
-  await assert.rejects(
-    encode(new Container(), destination),
-    /Encode is not implemented/,
-  );
+test("open lists tracks and reads a frame", async (t) => {
+  if (!existsSync(fixture)) {
+    t.skip("sample_op1a.mxf fixture is missing");
+    return;
+  }
+  const clip = await openMxf(fixture);
+  const info = await clip.info();
+  assert.ok(info.duration > 0);
+  assert.ok(info.tracks.length > 0);
+  const picture = info.tracks.filter((track) => track.kind === "picture");
+  await clip.select(picture);
+  await clip.seek(0);
+  const packages = await clip.read(1);
+  assert.ok(packages.length > 0);
+  assert.ok(packages[0].frames.length > 0);
+  assert.ok(packages[0].frames[0].data.byteLength > 0);
+  await clip.close();
 });
