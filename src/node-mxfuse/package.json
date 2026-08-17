@@ -23,13 +23,6 @@
     "artifacts:check": "../../scripts/check-napi-artifacts.sh",
     "prepublishOnly": "napi prepublish -t npm && pnpm run artifacts:check"
   },
-  "optionalDependencies": {
-    "mxfuse-darwin-arm64": "0.1.0",
-    "mxfuse-darwin-x64": "0.1.0",
-    "mxfuse-linux-x64-gnu": "0.1.0",
-    "mxfuse-linux-arm64-gnu": "0.1.0",
-    "mxfuse-win32-x64-msvc": "0.1.0"
-  },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
     "@napi-rs/cli": "^2.18.4",
