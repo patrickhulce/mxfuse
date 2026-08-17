@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "src/mxfuse-sys",
     "src/rust-mxfuse",
     "src/python-mxfuse",
     "src/node-mxfuse",
