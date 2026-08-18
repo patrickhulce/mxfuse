@@ -1,0 +1,172 @@
+--- a/src/mxf_op1a/OP1ATrack.cpp
++++ b/src/mxf_op1a/OP1ATrack.cpp
+@@ -54,6 +54,7 @@
+ #include <bmx/mxf_op1a/OP1AJPEG2000Track.h>
+ #include <bmx/mxf_op1a/OP1AJPEGXSTrack.h>
+ #include <bmx/mxf_op1a/OP1ATimedTextTrack.h>
++#include <bmx/mxf_op1a/OP1AOpaqueTrack.h>
+ #include <bmx/MXFUtils.h>
+ #include <bmx/Utils.h>
+ #include <bmx/BMXException.h>
+@@ -148,6 +149,9 @@
+     {ANC_DATA,                 {{-1, -1}, {0, 0}}},
+     {VBI_DATA,                 {{-1, -1}, {0, 0}}},
+     {TIMED_TEXT,               {{-1, -1}, {0, 0}}},
++    {OPAQUE_PICTURE,           {{-1, -1}, {0, 0}}},
++    {OPAQUE_SOUND,             {{-1, -1}, {0, 0}}},
++    {OPAQUE_DATA,              {{-1, -1}, {0, 0}}},
+ };
+ 
+ 
+@@ -267,6 +271,10 @@
+             return new OP1AVBIDataTrack(file, track_index, track_id, track_type_number, frame_rate, essence_type);
+         case TIMED_TEXT:
+             return new OP1ATimedTextTrack(file, track_index, track_id, track_type_number, frame_rate, essence_type);
++        case OPAQUE_PICTURE:
++        case OPAQUE_SOUND:
++        case OPAQUE_DATA:
++            return new OP1AOpaqueTrack(file, track_index, track_id, track_type_number, frame_rate, essence_type);
+         default:
+             BMX_ASSERT(false);
+     }
+--- a/src/mxf_op1a/CMakeLists.txt
++++ b/src/mxf_op1a/CMakeLists.txt
+@@ -15,6 +15,7 @@
+     mxf_op1a/OP1APictureTrack.cpp
+     mxf_op1a/OP1ARDD36Track.cpp
+     mxf_op1a/OP1ATimedTextTrack.cpp
++    mxf_op1a/OP1AOpaqueTrack.cpp
+     mxf_op1a/OP1ATrack.cpp
+     mxf_op1a/OP1AUncTrack.cpp
+     mxf_op1a/OP1AVBIDataTrack.cpp
+--- a/include/bmx/mxf_op1a/CMakeLists.txt
++++ b/include/bmx/mxf_op1a/CMakeLists.txt
+@@ -15,6 +15,7 @@
+     bmx/mxf_op1a/OP1APictureTrack.h
+     bmx/mxf_op1a/OP1ARDD36Track.h
+     bmx/mxf_op1a/OP1ATimedTextTrack.h
++    bmx/mxf_op1a/OP1AOpaqueTrack.h
+     bmx/mxf_op1a/OP1ATrack.h
+     bmx/mxf_op1a/OP1AUncTrack.h
+     bmx/mxf_op1a/OP1AVBIDataTrack.h
+--- a/include/bmx/mxf_op1a/OP1AOpaqueTrack.h
++++ b/include/bmx/mxf_op1a/OP1AOpaqueTrack.h
+@@ -0,0 +1,40 @@
++/*
++ * Copyright (C) 2026, mxfuse contributors
++ * SPDX-License-Identifier: BSD-3-Clause
++ */
++
++#ifndef BMX_OP1A_OPAQUE_TRACK_H_
++#define BMX_OP1A_OPAQUE_TRACK_H_
++
++
++#include <bmx/mxf_op1a/OP1ATrack.h>
++#include <bmx/mxf_helper/OpaqueMXFDescriptorHelper.h>
++
++
++
++namespace bmx
++{
++
++
++class OP1AOpaqueTrack : public OP1ATrack
++{
++public:
++    OP1AOpaqueTrack(OP1AFile *file, uint32_t track_index, uint32_t track_id, uint8_t track_type_number,
++                    mxfRational frame_rate, EssenceType essence_type);
++    virtual ~OP1AOpaqueTrack();
++
++protected:
++    virtual void PrepareWrite(uint8_t track_count);
++    virtual void WriteSamplesInt(const unsigned char *data, uint32_t size, uint32_t num_samples);
++
++private:
++    OpaqueMXFDescriptorHelper *mOpaqueDescriptorHelper;
++    int64_t mPosition;
++};
++
++
++};
++
++
++
++#endif
+--- a/src/mxf_op1a/OP1AOpaqueTrack.cpp
++++ b/src/mxf_op1a/OP1AOpaqueTrack.cpp
+@@ -0,0 +1,75 @@
++/*
++ * Copyright (C) 2026, mxfuse contributors
++ * SPDX-License-Identifier: BSD-3-Clause
++ */
++
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
++#include <bmx/mxf_op1a/OP1AOpaqueTrack.h>
++#include <bmx/mxf_op1a/OP1AFile.h>
++#include <bmx/BMXException.h>
++#include <bmx/Logging.h>
++
++using namespace std;
++using namespace bmx;
++using namespace mxfpp;
++
++
++
++static const mxfKey PICTURE_ELEMENT_KEY = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x15, 0x01, 0x7F, 0x00);
++static const mxfKey SOUND_ELEMENT_KEY   = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x16, 0x01, 0x7F, 0x00);
++static const mxfKey DATA_ELEMENT_KEY    = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x17, 0x01, 0x7F, 0x00);
++
++
++
++OP1AOpaqueTrack::OP1AOpaqueTrack(OP1AFile *file, uint32_t track_index, uint32_t track_id, uint8_t track_type_number,
++                                 mxfRational frame_rate, EssenceType essence_type)
++: OP1ATrack(file, track_index, track_id, track_type_number, frame_rate, essence_type)
++{
++    mOpaqueDescriptorHelper = dynamic_cast<OpaqueMXFDescriptorHelper*>(mDescriptorHelper);
++    BMX_ASSERT(mOpaqueDescriptorHelper);
++
++    if (essence_type == OPAQUE_SOUND) {
++        mTrackNumber = MXF_TRACK_NUM(0x16, 0x01, 0x7F, 0x00);
++        mEssenceElementKey = SOUND_ELEMENT_KEY;
++    } else if (essence_type == OPAQUE_DATA) {
++        mTrackNumber = MXF_TRACK_NUM(0x17, 0x01, 0x7F, 0x00);
++        mEssenceElementKey = DATA_ELEMENT_KEY;
++    } else {
++        mTrackNumber = MXF_TRACK_NUM(0x15, 0x01, 0x7F, 0x00);
++        mEssenceElementKey = PICTURE_ELEMENT_KEY;
++    }
++    mPosition = 0;
++}
++
++OP1AOpaqueTrack::~OP1AOpaqueTrack()
++{
++}
++
++void OP1AOpaqueTrack::PrepareWrite(uint8_t track_count)
++{
++    CompleteEssenceKeyAndTrackNum(track_count);
++
++    if (mEssenceType == OPAQUE_SOUND) {
++        mCPManager->RegisterSoundTrackElement(mTrackIndex, mEssenceElementKey, 4);
++        mIndexTable->RegisterSoundTrackElement(mTrackIndex);
++    } else if (mEssenceType == OPAQUE_DATA) {
++        mCPManager->RegisterDataTrackElement(mTrackIndex, mEssenceElementKey, 0, 0);
++        mIndexTable->RegisterDataTrackElement(mTrackIndex, false);
++    } else {
++        mCPManager->RegisterPictureTrackElement(mTrackIndex, mEssenceElementKey, false);
++        mIndexTable->RegisterPictureTrackElement(mTrackIndex, false, false);
++    }
++}
++
++void OP1AOpaqueTrack::WriteSamplesInt(const unsigned char *data, uint32_t size, uint32_t num_samples)
++{
++    BMX_CHECK(num_samples == 1);
++    BMX_CHECK(data && size);
++
++    mCPManager->WriteSamples(mTrackIndex, data, size, num_samples);
++    mIndexTable->AddIndexEntry(mTrackIndex, mPosition, 0, 0, 0x80, true, false);
++    mPosition++;
++}
