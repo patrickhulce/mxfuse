@@ -1,8 +1,8 @@
 use std::io::{self, SeekFrom};
 
 use mxfuse::{
-    ByteSink, ByteSource, ClipSpec, EssenceType, Flavour, Rational, ReadOptions, TrackKind,
-    TrackSpec,
+    ByteSink, ByteSource, ClipSpec, DescriptorKind, EssenceType, Flavour, Identity, PixelComponent,
+    Rational, ReadOptions, Timecode, TrackKind, TrackSpec, XmlMetadata,
 };
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -122,18 +122,22 @@ impl PyClip {
     }
 
     #[getter]
+    fn start_timecode(&mut self) -> PyResult<Option<PyTimecode>> {
+        Ok(self.clip()?.start_timecode().map(|tc| PyTimecode {
+            hour: tc.hour,
+            minute: tc.minute,
+            second: tc.second,
+            frame: tc.frame,
+            drop_frame: tc.drop_frame,
+        }))
+    }
+
+    #[getter]
     fn tracks(&mut self, py: Python<'_>) -> PyResult<Py<PyList>> {
         let tracks = self.clip()?.tracks().to_vec();
         let list = PyList::empty(py);
         for track in tracks {
-            list.append(PyTrack {
-                index: track.index,
-                kind: kind_name(track.kind),
-                essence_type: track.essence_type.name().to_string(),
-                essence_container_ul: track.essence_container_ul.to_vec(),
-                edit_rate: (track.edit_rate.num, track.edit_rate.den),
-                duration: track.duration,
-            })?;
+            list.append(py_track_from(track))?;
         }
         Ok(list.unbind())
     }
@@ -175,6 +179,7 @@ impl PyClip {
                         file_position: frame.file_position,
                         kl_size: frame.kl_size,
                         position: frame.position,
+                        track_index: frame.track_index,
                     })
                     .collect(),
             })
@@ -183,6 +188,23 @@ impl PyClip {
 
     fn close(&mut self) {
         self.inner = None;
+    }
+
+    #[getter]
+    fn xml(&mut self) -> PyResult<Vec<PyXmlMetadata>> {
+        let clip = self.clip()?;
+        Ok(clip
+            .xml()
+            .iter()
+            .map(|item| PyXmlMetadata {
+                data: item.data.clone(),
+                scheme_id: item.scheme_id.map(|ul| ul.to_vec()).unwrap_or_default(),
+                language: item.language.clone().unwrap_or_default(),
+                namespace: item.namespace.clone().unwrap_or_default(),
+                mime_type: item.mime_type.clone().unwrap_or_default(),
+                is_xml: item.is_xml,
+            })
+            .collect())
     }
 
     fn __enter__(slf: Py<Self>) -> Py<Self> {
@@ -200,6 +222,30 @@ impl PyClip {
     }
 }
 
+#[pyclass(name = "Timecode")]
+#[derive(Clone)]
+struct PyTimecode {
+    #[pyo3(get)]
+    hour: i16,
+    #[pyo3(get)]
+    minute: i16,
+    #[pyo3(get)]
+    second: i16,
+    #[pyo3(get)]
+    frame: i16,
+    #[pyo3(get)]
+    drop_frame: bool,
+}
+
+#[pyclass(name = "PixelComponent")]
+#[derive(Clone)]
+struct PyPixelComponent {
+    #[pyo3(get)]
+    code: u8,
+    #[pyo3(get)]
+    depth: u8,
+}
+
 #[pyclass(name = "Track")]
 #[derive(Clone)]
 struct PyTrack {
@@ -211,6 +257,42 @@ struct PyTrack {
     essence_type: String,
     #[pyo3(get)]
     essence_container_ul: Vec<u8>,
+    #[pyo3(get)]
+    coding_ul: Option<Vec<u8>>,
+    #[pyo3(get)]
+    descriptor: i32,
+    #[pyo3(get)]
+    stored_width: Option<u32>,
+    #[pyo3(get)]
+    stored_height: Option<u32>,
+    #[pyo3(get)]
+    display_width: Option<u32>,
+    #[pyo3(get)]
+    display_height: Option<u32>,
+    #[pyo3(get)]
+    component_depth: Option<u32>,
+    #[pyo3(get)]
+    subsampling: Option<(u32, u32)>,
+    #[pyo3(get)]
+    frame_layout: Option<u8>,
+    #[pyo3(get)]
+    aspect_ratio: Option<(i32, i32)>,
+    #[pyo3(get)]
+    video_line_map: Option<(i32, i32)>,
+    #[pyo3(get)]
+    pixel_layout: Vec<PyPixelComponent>,
+    #[pyo3(get)]
+    color_primaries: Option<Vec<u8>>,
+    #[pyo3(get)]
+    transfer_characteristic: Option<Vec<u8>>,
+    #[pyo3(get)]
+    coding_equations: Option<Vec<u8>>,
+    #[pyo3(get)]
+    sampling_rate: Option<u32>,
+    #[pyo3(get)]
+    channel_count: Option<u32>,
+    #[pyo3(get)]
+    quantization_bits: Option<u32>,
     #[pyo3(get)]
     edit_rate: (i32, i32),
     #[pyo3(get)]
@@ -230,6 +312,25 @@ struct PyFrame {
     kl_size: u8,
     #[pyo3(get)]
     position: i64,
+    #[pyo3(get)]
+    track_index: usize,
+}
+
+#[pyclass(name = "XmlMetadata")]
+#[derive(Clone)]
+struct PyXmlMetadata {
+    #[pyo3(get)]
+    data: Vec<u8>,
+    #[pyo3(get)]
+    scheme_id: Vec<u8>,
+    #[pyo3(get)]
+    language: String,
+    #[pyo3(get)]
+    namespace: String,
+    #[pyo3(get)]
+    mime_type: String,
+    #[pyo3(get)]
+    is_xml: bool,
 }
 
 #[pyclass(name = "Package")]
@@ -281,6 +382,42 @@ fn collect_indexes(py: Python<'_>, tracks: Bound<'_, PyAny>) -> PyResult<Vec<usi
     }
     let _ = py;
     Ok(indexes)
+}
+
+fn py_track_from(track: mxfuse::Track) -> PyTrack {
+    PyTrack {
+        index: track.index,
+        kind: kind_name(track.kind),
+        essence_type: track.essence_type.name().to_string(),
+        essence_container_ul: track.essence_container_ul.to_vec(),
+        coding_ul: track.coding_ul.map(|ul| ul.to_vec()),
+        descriptor: track.descriptor.as_i32(),
+        stored_width: track.stored_width,
+        stored_height: track.stored_height,
+        display_width: track.display_width,
+        display_height: track.display_height,
+        component_depth: track.component_depth,
+        subsampling: track.subsampling,
+        frame_layout: track.frame_layout,
+        aspect_ratio: track.aspect_ratio.map(|ratio| (ratio.num, ratio.den)),
+        video_line_map: track.video_line_map,
+        pixel_layout: track
+            .pixel_layout
+            .into_iter()
+            .map(|item| PyPixelComponent {
+                code: item.code,
+                depth: item.depth,
+            })
+            .collect(),
+        color_primaries: track.color_primaries.map(|ul| ul.to_vec()),
+        transfer_characteristic: track.transfer_characteristic.map(|ul| ul.to_vec()),
+        coding_equations: track.coding_equations.map(|ul| ul.to_vec()),
+        sampling_rate: track.sampling_rate,
+        channel_count: track.channel_count,
+        quantization_bits: track.quantization_bits,
+        edit_rate: (track.edit_rate.num, track.edit_rate.den),
+        duration: track.duration,
+    }
 }
 
 fn kind_name(kind: TrackKind) -> String {
@@ -427,6 +564,26 @@ fn clip_spec_from_py(py: Python<'_>, spec: Bound<'_, PyAny>) -> PyResult<ClipSpe
     for item in iter {
         tracks.push(track_spec_from_py(item?)?);
     }
+    let xml = match spec.getattr("xml") {
+        Ok(obj) if !obj.is_none() => xml_list_from_py(&obj)?,
+        _ => Vec::new(),
+    };
+    let start_timecode = match spec.getattr("start_timecode") {
+        Ok(value) if !value.is_none() => Some(timecode_from_py(&value)?),
+        _ => None,
+    };
+    let timecode_track = match spec.getattr("timecode_track") {
+        Ok(value) if !value.is_none() => value.extract::<bool>()?,
+        _ => true,
+    };
+    let system_item = match spec.getattr("system_item") {
+        Ok(value) if !value.is_none() => value.extract::<bool>()?,
+        _ => false,
+    };
+    let identity = match spec.getattr("identity") {
+        Ok(value) if !value.is_none() => Some(identity_from_py(&value)?),
+        _ => None,
+    };
     let _ = py;
     Ok(ClipSpec {
         edit_rate: Rational {
@@ -436,6 +593,11 @@ fn clip_spec_from_py(py: Python<'_>, spec: Bound<'_, PyAny>) -> PyResult<ClipSpe
         flavour: Flavour(flavour),
         duration,
         tracks,
+        xml,
+        start_timecode,
+        timecode_track,
+        system_item,
+        identity,
     })
 }
 
@@ -453,8 +615,53 @@ fn track_spec_from_py(track: Bound<'_, PyAny>) -> PyResult<TrackSpec> {
     spec.stored_width = optional_u32(&track, "stored_width")?;
     spec.stored_height = optional_u32(&track, "stored_height")?;
     spec.essence_container_ul = optional_ul(&track, "essence_container_ul")?;
-    spec.picture_coding_ul = optional_ul(&track, "picture_coding_ul")?;
+    spec.coding_ul = optional_ul(&track, "coding_ul")?;
+    spec.element_type = optional_u8(&track, "element_type")?;
+    spec.element_llen = optional_u8(&track, "element_llen")?;
+    spec.temporal_reordering = optional_bool(&track, "temporal_reordering")?.unwrap_or(false);
+    spec.descriptor = optional_descriptor(&track, "descriptor")?;
+    spec.component_depth = optional_u32(&track, "component_depth")?;
+    spec.subsampling = optional_pair_u32(&track, "subsampling")?;
+    spec.frame_layout = optional_u8(&track, "frame_layout")?;
+    spec.aspect_ratio = optional_rational(&track, "aspect_ratio")?;
+    spec.video_line_map = optional_pair_i32(&track, "video_line_map")?;
+    spec.pixel_layout = optional_pixel_layout(&track)?;
+    spec.color_primaries = optional_ul(&track, "color_primaries")?;
+    spec.transfer_characteristic = optional_ul(&track, "transfer_characteristic")?;
+    spec.coding_equations = optional_ul(&track, "coding_equations")?;
     Ok(spec)
+}
+
+fn xml_list_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Vec<XmlMetadata>> {
+    let iter = PyIterator::from_object(obj)?;
+    let mut items = Vec::new();
+    for item in iter {
+        items.push(xml_from_py(item?)?);
+    }
+    Ok(items)
+}
+
+fn xml_from_py(obj: Bound<'_, PyAny>) -> PyResult<XmlMetadata> {
+    let data: Vec<u8> = obj.getattr("data")?.extract()?;
+    let mut item = XmlMetadata::new(data);
+    item.scheme_id = optional_ul(&obj, "scheme_id")?;
+    if let Ok(value) = obj.getattr("language") {
+        if !value.is_none() {
+            let text: String = value.extract()?;
+            if !text.is_empty() {
+                item.language = Some(text);
+            }
+        }
+    }
+    if let Ok(value) = obj.getattr("namespace") {
+        if !value.is_none() {
+            let text: String = value.extract()?;
+            if !text.is_empty() {
+                item.namespace = Some(text);
+            }
+        }
+    }
+    Ok(item)
 }
 
 fn flavour_from_py(value: &Bound<'_, PyAny>) -> i32 {
@@ -475,6 +682,138 @@ fn optional_u32(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<u32>> {
     } else {
         Ok(Some(value.extract()?))
     }
+}
+
+fn optional_bool(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<bool>> {
+    match obj.getattr(name) {
+        Ok(value) if !value.is_none() => Ok(Some(value.extract()?)),
+        _ => Ok(None),
+    }
+}
+
+fn optional_u8(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<u8>> {
+    match obj.getattr(name) {
+        Ok(value) if !value.is_none() => Ok(Some(value.extract()?)),
+        _ => Ok(None),
+    }
+}
+
+fn optional_descriptor(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<DescriptorKind>> {
+    let Ok(value) = obj.getattr(name) else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+    let number = if let Ok(raw) = value.extract::<i32>() {
+        raw
+    } else {
+        value.getattr("value")?.extract::<i32>()?
+    };
+    Ok(Some(DescriptorKind::from_i32(number)))
+}
+
+fn optional_rational(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<Rational>> {
+    match obj.getattr(name) {
+        Ok(value) if !value.is_none() => {
+            let pair: (i32, i32) = value.extract()?;
+            Ok(Some(Rational {
+                num: pair.0,
+                den: pair.1,
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn optional_pair_u32(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<(u32, u32)>> {
+    match obj.getattr(name) {
+        Ok(value) if !value.is_none() => Ok(Some(value.extract()?)),
+        _ => Ok(None),
+    }
+}
+
+fn optional_pair_i32(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<(i32, i32)>> {
+    match obj.getattr(name) {
+        Ok(value) if !value.is_none() => Ok(Some(value.extract()?)),
+        _ => Ok(None),
+    }
+}
+
+fn optional_pixel_layout(obj: &Bound<'_, PyAny>) -> PyResult<Option<Vec<PixelComponent>>> {
+    let Ok(value) = obj.getattr("pixel_layout") else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+    let iter = PyIterator::from_object(&value)?;
+    let mut items = Vec::new();
+    for item in iter {
+        let item = item?;
+        let code = item.getattr("code")?.extract::<u8>()?;
+        let depth = item.getattr("depth")?.extract::<u8>()?;
+        items.push(PixelComponent { code, depth });
+    }
+    Ok(Some(items))
+}
+
+fn timecode_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Timecode> {
+    Ok(Timecode {
+        hour: obj.getattr("hour")?.extract()?,
+        minute: obj.getattr("minute")?.extract()?,
+        second: obj.getattr("second")?.extract()?,
+        frame: obj.getattr("frame")?.extract()?,
+        drop_frame: obj.getattr("drop_frame")?.extract()?,
+    })
+}
+
+fn identity_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Identity> {
+    Ok(Identity {
+        company_name: optional_string(obj, "company_name")?,
+        product_name: optional_string(obj, "product_name")?,
+        version_string: optional_string(obj, "version_string")?,
+        product_version: match obj.getattr("product_version") {
+            Ok(value) if !value.is_none() => Some(value.extract()?),
+            _ => None,
+        },
+        product_uid: optional_ul(obj, "product_uid")?,
+        creation_date: match obj.getattr("creation_date") {
+            Ok(value) if !value.is_none() => Some(value.extract()?),
+            _ => None,
+        },
+        generation_uid: optional_ul(obj, "generation_uid")?,
+        material_package_uid: optional_umid(obj, "material_package_uid")?,
+        file_source_package_uid: optional_umid(obj, "file_source_package_uid")?,
+    })
+}
+
+fn optional_string(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<String>> {
+    match obj.getattr(name) {
+        Ok(value) if !value.is_none() => {
+            let text: String = value.extract()?;
+            if text.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(text))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn optional_umid(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<[u8; 32]>> {
+    let Ok(value) = obj.getattr(name) else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+    let bytes: Vec<u8> = value.extract()?;
+    let array: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| PyValueError::new_err(format!("{name} must be 32 bytes")))?;
+    Ok(Some(array))
 }
 
 fn optional_ul(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<[u8; 16]>> {
@@ -498,5 +837,8 @@ fn _mxfuse(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTrack>()?;
     m.add_class::<PyFrame>()?;
     m.add_class::<PyPackage>()?;
+    m.add_class::<PyXmlMetadata>()?;
+    m.add_class::<PyTimecode>()?;
+    m.add_class::<PyPixelComponent>()?;
     Ok(())
 }
