@@ -17,8 +17,13 @@
 
 #include <bmx/BMXException.h>
 #include <bmx/EssenceType.h>
+#include <bmx/clip_writer/ClipWriter.h>
+#include <bmx/clip_writer/ClipWriterTrack.h>
 #include <bmx/frame/Frame.h>
 #include <bmx/frame/FrameBuffer.h>
+#include <bmx/mxf_helper/MXFDescriptorHelper.h>
+#include <bmx/mxf_helper/OpaqueMXFDescriptorHelper.h>
+#include <bmx/mxf_op1a/OP1AFile.h>
 #include <bmx/mxf_reader/MXFFileReader.h>
 #include <bmx/mxf_reader/MXFTrackInfo.h>
 #include <bmx/mxf_reader/MXFTrackReader.h>
@@ -76,9 +81,16 @@ uint32_t file_read(MXFFileSysData *sys, uint8_t *data, uint32_t count)
     return static_cast<uint32_t>(n);
 }
 
-uint32_t file_write(MXFFileSysData *, const uint8_t *, uint32_t)
+uint32_t file_write(MXFFileSysData *sys, const uint8_t *data, uint32_t count)
 {
-    return 0;
+    if (!sys || !sys->vt.write || !sys->ctx || !data) {
+        return 0;
+    }
+    int32_t n = sys->vt.write(sys->ctx, data, count);
+    if (n < 0) {
+        return 0;
+    }
+    return static_cast<uint32_t>(n);
 }
 
 int file_get_char(MXFFileSysData *sys)
@@ -90,9 +102,13 @@ int file_get_char(MXFFileSysData *sys)
     return static_cast<int>(byte);
 }
 
-int file_put_char(MXFFileSysData *, int)
+int file_put_char(MXFFileSysData *sys, int value)
 {
-    return EOF;
+    uint8_t byte = static_cast<uint8_t>(value);
+    if (file_write(sys, &byte, 1) != 1) {
+        return EOF;
+    }
+    return value;
 }
 
 int file_eof(MXFFileSysData *sys)
@@ -120,9 +136,12 @@ int64_t file_tell(MXFFileSysData *sys)
     return sys->vt.tell(sys->ctx);
 }
 
-int file_is_seekable(MXFFileSysData *)
+int file_is_seekable(MXFFileSysData *sys)
 {
-    return 1;
+    if (!sys || !sys->vt.is_seekable || !sys->ctx) {
+        return 1;
+    }
+    return sys->vt.is_seekable(sys->ctx);
 }
 
 int64_t file_size(MXFFileSysData *sys)
@@ -491,4 +510,229 @@ void mxfuse_frame_free(MxfuseFrameView *view)
 const char *mxfuse_essence_type_name(int32_t essence_type)
 {
     return bmx::essence_type_to_enum_string(static_cast<bmx::EssenceType>(essence_type));
+}
+
+struct MxfuseWriter {
+    bmx::ClipWriter *clip;
+    bool completed;
+};
+
+static mxfUL ul_from_bytes(const uint8_t src[MXFUSE_UL_LEN])
+{
+    mxfUL ul;
+    std::memcpy(&ul, src, MXFUSE_UL_LEN);
+    return ul;
+}
+
+int mxfuse_writer_open(
+    const MxfuseByteSourceVtable *vt,
+    void *ctx,
+    int flavour,
+    MxfuseRational edit_rate,
+    int64_t duration,
+    MxfuseWriter **out,
+    MxfuseError *err
+)
+{
+    if (!vt || !ctx || !out) {
+        set_error(err, "invalid arguments to mxfuse_writer_open");
+        return MXFUSE_ERR;
+    }
+    *out = 0;
+
+    MXFFile *mxf_file = create_mxf_file(vt, ctx);
+    if (!mxf_file) {
+        set_error(err, "failed to allocate MXFFile");
+        if (vt->close) {
+            vt->close(ctx);
+        }
+        return MXFUSE_ERR;
+    }
+
+    mxfpp::File *file = 0;
+    bmx::ClipWriter *clip = 0;
+    try {
+        file = new mxfpp::File(mxf_file);
+        bmx::Rational frame_rate;
+        frame_rate.numerator = edit_rate.num;
+        frame_rate.denominator = edit_rate.den;
+        clip = bmx::ClipWriter::OpenNewOP1AClip(flavour, file, frame_rate);
+        file = 0;
+        if (duration >= 0) {
+            clip->GetOP1AClip()->SetInputDuration(duration);
+        }
+        MxfuseWriter *handle = new MxfuseWriter();
+        handle->clip = clip;
+        handle->completed = false;
+        *out = handle;
+        return MXFUSE_OK;
+    } catch (const bmx::BMXException &e) {
+        delete clip;
+        delete file;
+        set_error(err, e.what());
+        return MXFUSE_ERR;
+    } catch (const mxfpp::MXFException &e) {
+        delete clip;
+        delete file;
+        set_error(err, e.getMessage().c_str());
+        return MXFUSE_ERR;
+    } catch (const std::exception &e) {
+        delete clip;
+        delete file;
+        set_error(err, e.what());
+        return MXFUSE_ERR;
+    } catch (...) {
+        delete clip;
+        delete file;
+        set_error(err, "unknown error opening MXF writer");
+        return MXFUSE_ERR;
+    }
+}
+
+int mxfuse_writer_create_track(
+    MxfuseWriter *writer,
+    const MxfuseTrackSpec *spec,
+    uint32_t *out_index,
+    MxfuseError *err
+)
+{
+    if (!writer || !writer->clip || !spec || !out_index) {
+        set_error(err, "invalid arguments to mxfuse_writer_create_track");
+        return MXFUSE_ERR;
+    }
+    try {
+        bmx::EssenceType essence_type = static_cast<bmx::EssenceType>(spec->essence_type);
+        bmx::ClipWriterTrack *track = writer->clip->CreateTrack(essence_type);
+        if (spec->flags & MXFUSE_TRACK_HAS_SAMPLING_RATE) {
+            bmx::Rational rate;
+            rate.numerator = spec->sampling_rate.num;
+            rate.denominator = spec->sampling_rate.den;
+            track->SetSamplingRate(rate);
+        }
+        if (spec->flags & MXFUSE_TRACK_HAS_CHANNEL_COUNT) {
+            track->SetChannelCount(spec->channel_count);
+        }
+        if (spec->flags & MXFUSE_TRACK_HAS_QUANT_BITS) {
+            track->SetQuantizationBits(spec->quantization_bits);
+        }
+        bmx::OpaqueMXFDescriptorHelper *opaque =
+            dynamic_cast<bmx::OpaqueMXFDescriptorHelper*>(track->GetMXFDescriptorHelper());
+        if (opaque) {
+            if (spec->flags & MXFUSE_TRACK_HAS_CONTAINER_UL) {
+                opaque->SetEssenceContainerUL(ul_from_bytes(spec->essence_container_ul));
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_CODING_UL) {
+                opaque->SetPictureCodingUL(ul_from_bytes(spec->picture_coding_ul));
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_STORED_WIDTH) {
+                opaque->SetStoredWidth(spec->stored_width);
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_STORED_HEIGHT) {
+                opaque->SetStoredHeight(spec->stored_height);
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_SAMPLING_RATE) {
+                mxfRational rate;
+                rate.numerator = spec->sampling_rate.num;
+                rate.denominator = spec->sampling_rate.den;
+                opaque->SetSamplingRate(rate);
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_CHANNEL_COUNT) {
+                opaque->SetChannelCount(spec->channel_count);
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_QUANT_BITS) {
+                opaque->SetQuantizationBits(spec->quantization_bits);
+            }
+        }
+        *out_index = writer->clip->GetNumTracks() - 1;
+        return MXFUSE_OK;
+    } catch (const bmx::BMXException &e) {
+        set_error(err, e.what());
+        return MXFUSE_ERR;
+    } catch (const mxfpp::MXFException &e) {
+        set_error(err, e.getMessage().c_str());
+        return MXFUSE_ERR;
+    } catch (...) {
+        set_error(err, "unknown error creating track");
+        return MXFUSE_ERR;
+    }
+}
+
+int mxfuse_writer_prepare(MxfuseWriter *writer, MxfuseError *err)
+{
+    if (!writer || !writer->clip) {
+        set_error(err, "invalid arguments to mxfuse_writer_prepare");
+        return MXFUSE_ERR;
+    }
+    try {
+        writer->clip->PrepareWrite();
+        return MXFUSE_OK;
+    } catch (const bmx::BMXException &e) {
+        set_error(err, e.what());
+        return MXFUSE_ERR;
+    } catch (const mxfpp::MXFException &e) {
+        set_error(err, e.getMessage().c_str());
+        return MXFUSE_ERR;
+    } catch (...) {
+        set_error(err, "unknown error preparing write");
+        return MXFUSE_ERR;
+    }
+}
+
+int mxfuse_writer_write_samples(
+    MxfuseWriter *writer,
+    uint32_t track_index,
+    const uint8_t *data,
+    uint32_t size,
+    uint32_t num_samples,
+    MxfuseError *err
+)
+{
+    if (!writer || !writer->clip || !data) {
+        set_error(err, "invalid arguments to mxfuse_writer_write_samples");
+        return MXFUSE_ERR;
+    }
+    try {
+        writer->clip->WriteSamples(track_index, data, size, num_samples);
+        return MXFUSE_OK;
+    } catch (const bmx::BMXException &e) {
+        set_error(err, e.what());
+        return MXFUSE_ERR;
+    } catch (const mxfpp::MXFException &e) {
+        set_error(err, e.getMessage().c_str());
+        return MXFUSE_ERR;
+    } catch (...) {
+        set_error(err, "unknown error writing samples");
+        return MXFUSE_ERR;
+    }
+}
+
+int mxfuse_writer_complete(MxfuseWriter *writer, MxfuseError *err)
+{
+    if (!writer || !writer->clip) {
+        set_error(err, "invalid arguments to mxfuse_writer_complete");
+        return MXFUSE_ERR;
+    }
+    try {
+        writer->clip->CompleteWrite();
+        writer->completed = true;
+        return MXFUSE_OK;
+    } catch (const bmx::BMXException &e) {
+        set_error(err, e.what());
+        return MXFUSE_ERR;
+    } catch (const mxfpp::MXFException &e) {
+        set_error(err, e.getMessage().c_str());
+        return MXFUSE_ERR;
+    } catch (...) {
+        set_error(err, "unknown error completing write");
+        return MXFUSE_ERR;
+    }
+}
+
+void mxfuse_writer_free(MxfuseWriter *writer)
+{
+    if (!writer) {
+        return;
+    }
+    delete writer->clip;
+    delete writer;
 }
