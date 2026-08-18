@@ -70,6 +70,63 @@ impl fmt::Display for EssenceType {
     }
 }
 
+/// File descriptor class used for an opaque track.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DescriptorKind {
+    Default = 0,
+    Cdci = 1,
+    Rgba = 2,
+    WaveAudio = 3,
+    GenericData = 4,
+}
+
+impl DescriptorKind {
+    pub fn from_i32(value: i32) -> Self {
+        match value {
+            1 => Self::Cdci,
+            2 => Self::Rgba,
+            3 => Self::WaveAudio,
+            4 => Self::GenericData,
+            _ => Self::Default,
+        }
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self as i32
+    }
+}
+
+/// One component of an RGBA `PixelLayout`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PixelComponent {
+    pub code: u8,
+    pub depth: u8,
+}
+
+/// Material Package start timecode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Timecode {
+    pub hour: i16,
+    pub minute: i16,
+    pub second: i16,
+    pub frame: i16,
+    pub drop_frame: bool,
+}
+
+/// Writer Identification and package UIDs. Unset fields keep bmx's generated values.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Identity {
+    pub company_name: Option<String>,
+    pub product_name: Option<String>,
+    pub version_string: Option<String>,
+    pub product_version: Option<(u16, u16, u16, u16, u16)>,
+    pub product_uid: Option<[u8; 16]>,
+    pub creation_date: Option<(i16, u8, u8, u8, u8, u8, u8)>,
+    pub generation_uid: Option<[u8; 16]>,
+    pub material_package_uid: Option<[u8; 32]>,
+    pub file_source_package_uid: Option<[u8; 32]>,
+}
+
 /// A track description captured at open time.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Track {
@@ -77,6 +134,24 @@ pub struct Track {
     pub kind: TrackKind,
     pub essence_type: EssenceType,
     pub essence_container_ul: [u8; 16],
+    pub coding_ul: Option<[u8; 16]>,
+    pub descriptor: DescriptorKind,
+    pub stored_width: Option<u32>,
+    pub stored_height: Option<u32>,
+    pub display_width: Option<u32>,
+    pub display_height: Option<u32>,
+    pub component_depth: Option<u32>,
+    pub subsampling: Option<(u32, u32)>,
+    pub frame_layout: Option<u8>,
+    pub aspect_ratio: Option<Rational>,
+    pub video_line_map: Option<(i32, i32)>,
+    pub pixel_layout: Vec<PixelComponent>,
+    pub color_primaries: Option<[u8; 16]>,
+    pub transfer_characteristic: Option<[u8; 16]>,
+    pub coding_equations: Option<[u8; 16]>,
+    pub sampling_rate: Option<u32>,
+    pub channel_count: Option<u32>,
+    pub quantization_bits: Option<u32>,
     pub edit_rate: Rational,
     pub duration: i64,
 }
@@ -89,6 +164,7 @@ pub struct Frame {
     pub file_position: i64,
     pub kl_size: u8,
     pub position: i64,
+    pub track_index: usize,
 }
 
 /// The frames belonging to one edit unit, across the selected tracks.
@@ -141,7 +217,20 @@ pub struct TrackSpec {
     pub stored_width: Option<u32>,
     pub stored_height: Option<u32>,
     pub essence_container_ul: Option<[u8; 16]>,
-    pub picture_coding_ul: Option<[u8; 16]>,
+    pub coding_ul: Option<[u8; 16]>,
+    pub element_type: Option<u8>,
+    pub element_llen: Option<u8>,
+    pub temporal_reordering: bool,
+    pub descriptor: Option<DescriptorKind>,
+    pub component_depth: Option<u32>,
+    pub subsampling: Option<(u32, u32)>,
+    pub frame_layout: Option<u8>,
+    pub aspect_ratio: Option<Rational>,
+    pub video_line_map: Option<(i32, i32)>,
+    pub pixel_layout: Option<Vec<PixelComponent>>,
+    pub color_primaries: Option<[u8; 16]>,
+    pub transfer_characteristic: Option<[u8; 16]>,
+    pub coding_equations: Option<[u8; 16]>,
 }
 
 impl TrackSpec {
@@ -154,7 +243,44 @@ impl TrackSpec {
             stored_width: None,
             stored_height: None,
             essence_container_ul: None,
-            picture_coding_ul: None,
+            coding_ul: None,
+            element_type: None,
+            element_llen: None,
+            temporal_reordering: false,
+            descriptor: None,
+            component_depth: None,
+            subsampling: None,
+            frame_layout: None,
+            aspect_ratio: None,
+            video_line_map: None,
+            pixel_layout: None,
+            color_primaries: None,
+            transfer_characteristic: None,
+            coding_equations: None,
+        }
+    }
+}
+
+/// Clip-level XML (ST 434 / generic stream), not an essence track.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct XmlMetadata {
+    pub data: Vec<u8>,
+    pub scheme_id: Option<[u8; 16]>,
+    pub language: Option<String>,
+    pub namespace: Option<String>,
+    pub mime_type: Option<String>,
+    pub is_xml: bool,
+}
+
+impl XmlMetadata {
+    pub fn new(data: impl Into<Vec<u8>>) -> Self {
+        Self {
+            data: data.into(),
+            scheme_id: None,
+            language: None,
+            namespace: None,
+            mime_type: None,
+            is_xml: true,
         }
     }
 }
@@ -166,4 +292,25 @@ pub struct ClipSpec {
     pub flavour: Flavour,
     pub duration: Option<i64>,
     pub tracks: Vec<TrackSpec>,
+    pub xml: Vec<XmlMetadata>,
+    pub start_timecode: Option<Timecode>,
+    pub timecode_track: bool,
+    pub system_item: bool,
+    pub identity: Option<Identity>,
+}
+
+impl Default for ClipSpec {
+    fn default() -> Self {
+        Self {
+            edit_rate: Rational { num: 25, den: 1 },
+            flavour: Flavour::DEFAULT,
+            duration: None,
+            tracks: Vec::new(),
+            xml: Vec::new(),
+            start_timecode: None,
+            timecode_track: true,
+            system_item: false,
+            identity: None,
+        }
+    }
 }

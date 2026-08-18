@@ -1,7 +1,8 @@
 use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
+use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// A synchronous random-access byte source.
 ///
@@ -114,6 +115,69 @@ impl<S: ByteSource> CountingSource<S> {
 
     pub fn read_count(&self) -> usize {
         self.reads.load(Ordering::SeqCst)
+    }
+
+    pub fn byte_count(&self) -> usize {
+        self.bytes.load(Ordering::SeqCst)
+    }
+}
+
+/// A byte source that records the file-offset range of every `read`.
+///
+/// Position is tracked across `seek` so each served slice can be logged as
+/// `[pos, pos + n)`. The log is published through an `Arc` so tests can
+/// inspect demand after `open_mxf` takes ownership of the source.
+pub struct RecordingSource<S> {
+    inner: S,
+    pos: u64,
+    pub ranges: Arc<Mutex<Vec<Range<u64>>>>,
+}
+
+impl<S: ByteSource> RecordingSource<S> {
+    pub fn new(mut inner: S) -> io::Result<Self> {
+        let pos = inner.seek(SeekFrom::Current(0))?;
+        Ok(Self {
+            inner,
+            pos,
+            ranges: Arc::new(Mutex::new(Vec::new())),
+        })
+    }
+
+    pub fn ranges(&self) -> Vec<Range<u64>> {
+        self.ranges
+            .lock()
+            .expect("recording source lock poisoned")
+            .clone()
+    }
+
+    pub fn bytes_read(&self) -> u64 {
+        self.ranges()
+            .iter()
+            .map(|range| range.end - range.start)
+            .sum()
+    }
+}
+
+impl<S: ByteSource> ByteSource for RecordingSource<S> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if n > 0 {
+            self.ranges
+                .lock()
+                .expect("recording source lock poisoned")
+                .push(self.pos..self.pos + n as u64);
+            self.pos += n as u64;
+        }
+        Ok(n)
+    }
+
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        self.pos = self.inner.seek(pos)?;
+        Ok(self.pos)
+    }
+
+    fn size(&mut self) -> io::Result<u64> {
+        self.inner.size()
     }
 }
 
@@ -290,5 +354,17 @@ mod tests {
         source.read(&mut buf).unwrap();
         assert_eq!(source.inner().read_count(), 2);
         assert_eq!(&buf, &[40, 41]);
+    }
+
+    #[test]
+    fn recording_source_logs_served_ranges() {
+        let data: Vec<u8> = (0..32).collect();
+        let mut source = RecordingSource::new(Cursor::new(data)).unwrap();
+        let mut buf = [0u8; 4];
+        assert_eq!(source.read(&mut buf).unwrap(), 4);
+        source.seek(SeekFrom::Start(10)).unwrap();
+        assert_eq!(source.read(&mut buf).unwrap(), 4);
+        assert_eq!(source.ranges(), vec![0..4, 10..14]);
+        assert_eq!(source.bytes_read(), 8);
     }
 }
