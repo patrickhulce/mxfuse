@@ -16,11 +16,11 @@ const fixture = join(
   "sample_op1a.mxf",
 );
 
-test("open lists tracks and reads a frame", async (t) => {
-  if (!existsSync(fixture)) {
-    t.skip("sample_op1a.mxf fixture is missing");
-    return;
-  }
+test("open lists tracks and reads a frame", async () => {
+  assert.ok(
+    existsSync(fixture),
+    "missing sample_op1a.mxf; run ./scripts/generate-fixture.sh",
+  );
   const clip = await openMxf(fixture);
   const info = await clip.info();
   assert.ok(info.duration > 0);
@@ -69,6 +69,58 @@ test("write round trip unc and pcm", async () => {
     assert.deepEqual(packages[0].frames[0].data, Uint8Array.from(picture));
     assert.deepEqual(packages[0].frames[1].data, Uint8Array.from(audio));
     assert.ok(packages[0].frames[0].klSize > 0);
+    assert.equal(packages[0].frames[0].trackIndex, 0);
+    await clip.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("write round trip xml and opaque", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mxfuse-"));
+  const path = join(dir, "out.mxf");
+  try {
+    const xml = Buffer.from('<clip xmlns="urn:x-mxfuse:test">hello</clip>');
+    const writer = await writeMxf(path, {
+      editRate: [24, 1],
+      duration: 2,
+      tracks: [
+        {
+          essenceType: EssenceType.OPAQUE_PICTURE,
+          storedWidth: 64,
+          storedHeight: 32,
+          essenceContainerUl: Uint8Array.from(
+            Buffer.from("060e2b34040101010d010301027f0101", "hex"),
+          ),
+          codingUl: Uint8Array.from(
+            Buffer.from("060e2b3404010101040102017f000000", "hex"),
+          ),
+        },
+      ],
+      xml: [{ data: xml, language: "en", namespace: "urn:x-mxfuse:test" }],
+    });
+    await writer.write(0, Buffer.from("frame-a"));
+    await writer.write(0, Buffer.from("frame-b"));
+    await writer.finish();
+
+    const clip = await openMxf(path);
+    const docs = await clip.xml;
+    assert.equal(docs.length, 1);
+    assert.deepEqual(docs[0].data, Uint8Array.from(xml));
+    const info = await clip.info();
+    await clip.select(info.tracks);
+    await clip.seek(0);
+    const packages = await clip.read(2);
+    assert.equal(packages.length, 2);
+    assert.deepEqual(
+      packages[0].frames[0].data,
+      Uint8Array.from(Buffer.from("frame-a")),
+    );
+    assert.deepEqual(
+      packages[1].frames[0].data,
+      Uint8Array.from(Buffer.from("frame-b")),
+    );
+    assert.equal(packages[0].frames[0].trackIndex, 0);
     await clip.close();
   } finally {
     await rm(dir, { recursive: true, force: true });

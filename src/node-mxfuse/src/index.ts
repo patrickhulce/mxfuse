@@ -43,6 +43,50 @@ export const Flavour = {
 
 export type Flavour = (typeof Flavour)[keyof typeof Flavour];
 
+export const DescriptorKind = {
+  DEFAULT: 0,
+  CDCI: 1,
+  RGBA: 2,
+  WAVE_AUDIO: 3,
+  GENERIC_DATA: 4,
+} as const;
+
+export type DescriptorKind =
+  (typeof DescriptorKind)[keyof typeof DescriptorKind];
+
+export interface PixelComponent {
+  code: number;
+  depth: number;
+}
+
+export interface Timecode {
+  hour?: number;
+  minute?: number;
+  second?: number;
+  frame?: number;
+  dropFrame?: boolean;
+}
+
+export interface Identity {
+  companyName?: string;
+  productName?: string;
+  versionString?: string;
+  productVersion?: readonly [number, number, number, number, number];
+  productUid?: Uint8Array;
+  creationDate?: readonly [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  generationUid?: Uint8Array;
+  materialPackageUid?: Uint8Array;
+  fileSourcePackageUid?: Uint8Array;
+}
+
 export interface TrackSpec {
   essenceType: EssenceType | number;
   samplingRate?: number;
@@ -51,7 +95,30 @@ export interface TrackSpec {
   storedWidth?: number;
   storedHeight?: number;
   essenceContainerUl?: Uint8Array;
-  pictureCodingUl?: Uint8Array;
+  codingUl?: Uint8Array;
+  elementType?: number;
+  elementLlen?: number;
+  temporalReordering?: boolean;
+  descriptor?: DescriptorKind | number;
+  componentDepth?: number;
+  horizSubsampling?: number;
+  vertSubsampling?: number;
+  frameLayout?: number;
+  aspectRatio?: readonly [number, number];
+  videoLineMap?: readonly [number, number];
+  pixelLayout?: readonly PixelComponent[];
+  colorPrimaries?: Uint8Array;
+  transferCharacteristic?: Uint8Array;
+  codingEquations?: Uint8Array;
+}
+
+export interface XmlMetadata {
+  data: Uint8Array;
+  schemeId?: Uint8Array;
+  language?: string;
+  namespace?: string;
+  mimeType?: string;
+  isXml?: boolean;
 }
 
 export interface ClipSpec {
@@ -59,6 +126,11 @@ export interface ClipSpec {
   tracks: readonly TrackSpec[];
   flavour?: Flavour | number;
   duration?: number;
+  xml?: readonly XmlMetadata[];
+  startTimecode?: Timecode;
+  timecodeTrack?: boolean;
+  systemItem?: boolean;
+  identity?: Identity;
 }
 
 export interface Track {
@@ -66,6 +138,24 @@ export interface Track {
   kind: TrackKind;
   essenceType: string;
   essenceContainerUl: Uint8Array;
+  codingUl?: Uint8Array;
+  descriptor: DescriptorKind;
+  storedWidth?: number;
+  storedHeight?: number;
+  displayWidth?: number;
+  displayHeight?: number;
+  componentDepth?: number;
+  subsampling?: readonly [number, number];
+  frameLayout?: number;
+  aspectRatio?: readonly [number, number];
+  videoLineMap?: readonly [number, number];
+  pixelLayout: readonly PixelComponent[];
+  colorPrimaries?: Uint8Array;
+  transferCharacteristic?: Uint8Array;
+  codingEquations?: Uint8Array;
+  samplingRate?: number;
+  channelCount?: number;
+  quantizationBits?: number;
   editRate: readonly [number, number];
   duration: number;
 }
@@ -76,6 +166,7 @@ export interface Frame {
   filePosition: number;
   klSize: number;
   position: number;
+  trackIndex: number;
 }
 
 export interface Package {
@@ -105,10 +196,78 @@ function toNativeClipSpec(spec: ClipSpec): NativeClipSpec {
       essenceContainerUl: track.essenceContainerUl
         ? Buffer.from(track.essenceContainerUl)
         : undefined,
-      pictureCodingUl: track.pictureCodingUl
-        ? Buffer.from(track.pictureCodingUl)
+      codingUl: track.codingUl ? Buffer.from(track.codingUl) : undefined,
+      elementType: track.elementType,
+      elementLlen: track.elementLlen,
+      temporalReordering: track.temporalReordering,
+      descriptor: track.descriptor,
+      componentDepth: track.componentDepth,
+      horizSubsampling: track.horizSubsampling,
+      vertSubsampling: track.vertSubsampling,
+      frameLayout: track.frameLayout,
+      aspectRatioNum: track.aspectRatio?.[0],
+      aspectRatioDen: track.aspectRatio?.[1],
+      videoLineMap: track.videoLineMap
+        ? [track.videoLineMap[0], track.videoLineMap[1]]
+        : undefined,
+      pixelLayout: track.pixelLayout?.map((item) => ({
+        code: item.code,
+        depth: item.depth,
+      })),
+      colorPrimaries: track.colorPrimaries
+        ? Buffer.from(track.colorPrimaries)
+        : undefined,
+      transferCharacteristic: track.transferCharacteristic
+        ? Buffer.from(track.transferCharacteristic)
+        : undefined,
+      codingEquations: track.codingEquations
+        ? Buffer.from(track.codingEquations)
         : undefined,
     })),
+    xml: spec.xml?.map((item) => ({
+      data: Buffer.from(item.data),
+      schemeId: item.schemeId ? Buffer.from(item.schemeId) : undefined,
+      language: item.language,
+      namespace: item.namespace,
+      mimeType: item.mimeType,
+      isXml: item.isXml ?? true,
+    })),
+    startTimecode: spec.startTimecode
+      ? {
+          hour: spec.startTimecode.hour ?? 0,
+          minute: spec.startTimecode.minute ?? 0,
+          second: spec.startTimecode.second ?? 0,
+          frame: spec.startTimecode.frame ?? 0,
+          dropFrame: spec.startTimecode.dropFrame ?? false,
+        }
+      : undefined,
+    timecodeTrack: spec.timecodeTrack,
+    systemItem: spec.systemItem,
+    identity: spec.identity
+      ? {
+          companyName: spec.identity.companyName,
+          productName: spec.identity.productName,
+          versionString: spec.identity.versionString,
+          productVersion: spec.identity.productVersion
+            ? [...spec.identity.productVersion]
+            : undefined,
+          productUid: spec.identity.productUid
+            ? Buffer.from(spec.identity.productUid)
+            : undefined,
+          creationDate: spec.identity.creationDate
+            ? [...spec.identity.creationDate]
+            : undefined,
+          generationUid: spec.identity.generationUid
+            ? Buffer.from(spec.identity.generationUid)
+            : undefined,
+          materialPackageUid: spec.identity.materialPackageUid
+            ? Buffer.from(spec.identity.materialPackageUid)
+            : undefined,
+          fileSourcePackageUid: spec.identity.fileSourcePackageUid
+            ? Buffer.from(spec.identity.fileSourcePackageUid)
+            : undefined,
+        }
+      : undefined,
   };
 }
 
@@ -122,17 +281,65 @@ export class Clip {
   public async info(): Promise<{
     editRate: readonly [number, number];
     duration: number;
+    startTimecode?: Timecode;
     tracks: readonly Track[];
   }> {
     const info = await this.native.info();
     return {
       editRate: [info.editRateNum, info.editRateDen],
       duration: info.duration,
+      startTimecode: info.startTimecode
+        ? {
+            hour: info.startTimecode.hour,
+            minute: info.startTimecode.minute,
+            second: info.startTimecode.second,
+            frame: info.startTimecode.frame,
+            dropFrame: info.startTimecode.dropFrame,
+          }
+        : undefined,
       tracks: info.tracks.map((track) => ({
         index: track.index,
         kind: track.kind as TrackKind,
         essenceType: track.essenceType,
         essenceContainerUl: Uint8Array.from(track.essenceContainerUl),
+        codingUl: track.codingUl ? Uint8Array.from(track.codingUl) : undefined,
+        descriptor: track.descriptor as DescriptorKind,
+        storedWidth: track.storedWidth,
+        storedHeight: track.storedHeight,
+        displayWidth: track.displayWidth,
+        displayHeight: track.displayHeight,
+        componentDepth: track.componentDepth,
+        subsampling:
+          track.horizSubsampling !== undefined &&
+          track.vertSubsampling !== undefined
+            ? [track.horizSubsampling, track.vertSubsampling]
+            : undefined,
+        frameLayout: track.frameLayout,
+        aspectRatio:
+          track.aspectRatioNum !== undefined &&
+          track.aspectRatioDen !== undefined
+            ? [track.aspectRatioNum, track.aspectRatioDen]
+            : undefined,
+        videoLineMap:
+          track.videoLineMap && track.videoLineMap.length >= 2
+            ? [track.videoLineMap[0], track.videoLineMap[1]]
+            : undefined,
+        pixelLayout: (track.pixelLayout ?? []).map((item) => ({
+          code: item.code,
+          depth: item.depth,
+        })),
+        colorPrimaries: track.colorPrimaries
+          ? Uint8Array.from(track.colorPrimaries)
+          : undefined,
+        transferCharacteristic: track.transferCharacteristic
+          ? Uint8Array.from(track.transferCharacteristic)
+          : undefined,
+        codingEquations: track.codingEquations
+          ? Uint8Array.from(track.codingEquations)
+          : undefined,
+        samplingRate: track.samplingRate,
+        channelCount: track.channelCount,
+        quantizationBits: track.quantizationBits,
         editRate: [track.editRateNum, track.editRateDen],
         duration: track.duration,
       })),
@@ -149,6 +356,23 @@ export class Clip {
 
   public get tracks(): Promise<readonly Track[]> {
     return this.info().then((info) => info.tracks);
+  }
+
+  public get startTimecode(): Promise<Timecode | undefined> {
+    return this.info().then((info) => info.startTimecode);
+  }
+
+  public get xml(): Promise<readonly XmlMetadata[]> {
+    return this.native.xml().then((items) =>
+      items.map((item) => ({
+        data: Uint8Array.from(item.data),
+        schemeId: item.schemeId ? Uint8Array.from(item.schemeId) : undefined,
+        language: item.language,
+        namespace: item.namespace,
+        mimeType: item.mimeType,
+        isXml: item.isXml,
+      })),
+    );
   }
 
   public async select(tracks: Iterable<Track>): Promise<void> {
@@ -168,6 +392,7 @@ export class Clip {
         filePosition: frame.filePosition,
         klSize: frame.klSize,
         position: frame.position,
+        trackIndex: frame.trackIndex,
       })),
     }));
   }
