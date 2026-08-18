@@ -4,7 +4,11 @@ Rust-first MXF container primitives with Python and Node.js bindings, built on
 a statically linked [bmx](https://github.com/ebu/bmx) core.
 
 Essence goes in and essence comes out. A frame is the KLV payload with the key
-and length stripped. The core is synchronous: one reader or writer per thread.
+and length stripped. You can reproduce any Generic Container mapping exactly —
+element key, BER length, descriptor class, and every descriptor field — and
+read that mapping back: the picture coding UL and the full descriptor survive
+a round trip. Pin product info, creation date, generation UID, and package
+UMIDs on write. The core is synchronous: one reader or writer per thread.
 
 ```bash
 cargo add mxfuse
@@ -44,7 +48,11 @@ with open("input.mxf", "rb") as f:
 ```
 
 A custom byte source is any object that implements `read`, `seek`, `tell`, and
-optionally `size`. Regular files infer size via `seek(0, 2)`.
+optionally `size`. Regular files infer size via `seek(0, 2)`. Tune `read_ahead`
+and `cache_bytes` for remote sources: `make bench` on a 61 MB synthetic OP1a
+sought the last picture frame in 41,007 reads (127 KB) with both off, and 3
+reads (1.2 MB) with the defaults. A 1 MB window overshoots into neighbouring
+interleaved essence; set both to 0 for payload-level track isolation.
 
 ```python
 from mxfuse import ClipSpec, EssenceType, Flavour, TrackSpec, write_mxf
@@ -61,8 +69,41 @@ spec = ClipSpec(
 
 with open("output.mxf", "wb") as f, write_mxf(f, spec) as clip:
     for image, audio in zip(images, audios):
-        clip.write(0, image)
-        clip.write(1, audio)
+        clip.write_unit(image, audio)
+```
+
+A private Generic Container mapping supplies the element key, BER length,
+descriptor class, and descriptor fields. On read, `track.coding_ul` and the
+picture descriptor identify the mapping.
+
+```python
+from mxfuse import ClipSpec, DescriptorKind, EssenceType, PixelComponent, TrackSpec, write_mxf
+
+spec = ClipSpec(
+    edit_rate=(24, 1),
+    duration=len(images),
+    system_item=True,
+    tracks=[
+        TrackSpec(
+            EssenceType.OPAQUE_PICTURE,
+            essence_container_ul="060e2b340401010d0d01030102700100",
+            coding_ul="060e2b340401010d0401020270000000",
+            stored_width=4096,
+            stored_height=2160,
+            element_type=0x70,
+            element_llen=8,
+            temporal_reordering=True,
+            descriptor=DescriptorKind.RGBA,
+            aspect_ratio=(16, 9),
+            video_line_map=(1, 0),
+            pixel_layout=(
+                PixelComponent(code=ord("R"), depth=32),
+                PixelComponent(code=ord("G"), depth=32),
+                PixelComponent(code=ord("B"), depth=32),
+            ),
+        ),
+    ],
+)
 ```
 
 ### Node
@@ -142,6 +183,8 @@ let spec = ClipSpec {
             ..TrackSpec::new(EssenceType::WAVE_PCM)
         },
     ],
+    xml: vec![],
+    ..ClipSpec::default()
 };
 let mut writer = write_mxf(file, spec)?;
 for (image, audio) in images.iter().zip(audios.iter()) {
@@ -153,7 +196,8 @@ writer.finish()?;
 
 `file_position` for frame-wrapped essence points at the KLV, with `kl_size`
 giving the header length. Clip-wrapped essence points at the sample data and
-`kl_size` is 0.
+`kl_size` is 0. Clip-level XML (ST 434 / generic stream) is `ClipSpec.xml` on
+write and `clip.xml` on read; it is not an essence track.
 
 ## Development
 
@@ -184,4 +228,6 @@ make              # build, lint, typecheck, test
 make build        # build all targets
 make test         # run all tests
 make fixtures     # generate tests/fixtures/sample_op1a.mxf
+make bench        # print read/byte costs across ReadOptions
+make examples     # JPEG XL Generic Container round-trip (needs .data/4KProRes.mov)
 ```
