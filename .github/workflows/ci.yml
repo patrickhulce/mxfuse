@@ -79,3 +79,24 @@ jobs:
           chmod +x scripts/check-linkage.sh
           node_bin="$(find src/node-mxfuse -maxdepth 1 -name '*.node' | head -n 1)"
           ./scripts/check-linkage.sh "$node_bin"
+
+  patches:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Apply patches to a pristine vendor/bmx copy
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          cp -a vendor/bmx/. "$work/"
+          shopt -s nullglob
+          patches=(patches/*.patch)
+          if [ "${#patches[@]}" -eq 0 ]; then
+            echo "no patches found under patches/"
+            exit 1
+          fi
+          for patch in "${patches[@]}"; do
+            echo "Applying ${patch}"
+            patch -d "$work" -p1 --fuzz=0 --forward --silent < "$patch"
+          done
+          echo "applied ${#patches[@]} patch(es)"
