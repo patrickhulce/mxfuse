@@ -40,5 +40,9 @@ strict = true
 module = "mxfuse._mxfuse"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "mxf_structure"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
