@@ -8,3 +8,7 @@ configure is offline and needs no `git`.
 
 Do not treat this as a git submodule. The files are ordinary tracked source so
 `cargo package` can include them.
+
+The tree stays pristine. `src/mxfuse-sys/build.rs` copies it into `$OUT_DIR`
+and applies the unified diffs under `patches/` (opaque essence type) before
+cmake runs. Do not edit files under `vendor/bmx` to add mxfuse behavior.

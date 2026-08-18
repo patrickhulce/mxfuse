@@ -152,11 +152,11 @@ libMXF's `MXFFile` is a C vtable of eleven function pointers (`close`, `read`, `
 
 ### How do private codecs work if bmx has a closed catalogue?
 
-Reading unknown essence already works unpatched — bmx degrades it to generic picture/sound/data and still returns the raw bytes. Writing it is the part bmx cannot do out of the box: `EssenceType` is a closed enum and `OP1ATrack::Create` is a hardcoded switch. `mxfuse` vendors bmx as a submodule plus a small tracked patch set under `patches/` that adds one opaque essence type; you consume a prebuilt wheel or napi binary and never fork. The patch is intended for upstream to `ebu/bmx`.
+Reading unknown essence already works unpatched — bmx degrades it to generic picture/sound/data and still returns the raw bytes. Writing it is the part bmx cannot do out of the box: `EssenceType` is a closed enum and `OP1ATrack::Create` is a hardcoded switch. `mxfuse` vendors a materialized `vendor/bmx` tree plus a small tracked patch set under `patches/` that adds one opaque essence type; you consume a prebuilt wheel or napi binary and never fork. The patch is intended for upstream to `ebu/bmx`.
 
 ### How is the vendored patch set kept current?
 
-bmx lives as a git submodule pinned to a known commit. The opaque-essence patch is a small, tracked set of diffs under `patches/` (enum value, descriptor helper, OP1a track class, factory switch, CMake). CI rebases the patch onto upstream `main` and fails the build if it no longer applies. The intent is to upstream the opaque type to `ebu/bmx` and then delete the patch.
+`vendor/bmx` is a materialized ebu/bmx v1.7 tree (not a git submodule), so `cargo package` can include it and a source build does not need `git`. `build.rs` copies that tree into `$OUT_DIR` and applies `patches/*.patch` with the `diffy` crate — enum value, descriptor helper, OP1a track class, factory switch, CMake. CI applies the same patches to a pristine copy and fails if any patch rejects. The intent is to upstream the opaque type to `ebu/bmx` and then delete the patch.
 
 ### What does "async" actually mean if the core is synchronous?
 
