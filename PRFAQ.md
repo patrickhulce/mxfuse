@@ -67,7 +67,7 @@ bmx requires every track to be created, then `PrepareWrite()`, then `WriteSample
 from mxfuse import ClipSpec, TrackSpec, EssenceType, Flavour, write_mxf
 
 spec = ClipSpec(
-    edit_rate=(24000, 1001),
+    edit_rate=(25, 1),
     flavour=Flavour.SINGLE_PASS,   # streamable; requires duration
     duration=len(images),
     tracks=[
