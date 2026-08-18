@@ -5,7 +5,8 @@ set -euo pipefail
 binary="${1:?usage: check-linkage.sh <binary>}"
 os="${2:-$(uname -s)}"
 
-forbidden='libbmx|libMXF|libMXF\+\+|libexpat|liburiparser|libuuid'
+# Require a following '.' so libMXF does not match libmxfuse_*.dylib.
+forbidden='libbmx\.|libMXF(\+\+)?\.|libexpat\.|liburiparser\.|libuuid\.'
 
 case "$os" in
   Linux|linux)
