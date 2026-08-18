@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
-from enum import Enum
+from dataclasses import dataclass, field
+from enum import Enum, IntEnum
 from typing import Protocol, runtime_checkable
 
 from mxfuse._mxfuse import Clip as NativeClip
+from mxfuse._mxfuse import Writer as NativeWriter
 from mxfuse._mxfuse import open_mxf as _open_mxf
+from mxfuse._mxfuse import write_mxf as _write_mxf
 
 
 @runtime_checkable
@@ -22,6 +24,17 @@ class BinarySource(Protocol):
     def tell(self) -> int: ...
 
 
+@runtime_checkable
+class BinarySink(Protocol):
+    """Minimal open-like writable handle accepted by :func:`write_mxf`."""
+
+    def write(self, data: bytes, /) -> int | None: ...
+
+    def seek(self, offset: int, whence: int = 0, /) -> int: ...
+
+    def tell(self) -> int: ...
+
+
 class TrackKind(str, Enum):
     PICTURE = "picture"
     SOUND = "sound"
@@ -29,10 +42,44 @@ class TrackKind(str, Enum):
     OTHER = "other"
 
 
+class EssenceType(IntEnum):
+    UNKNOWN = 0
+    UNC_HD_1080P = 35
+    WAVE_PCM = 90
+    OPAQUE_PICTURE = 97
+    OPAQUE_SOUND = 98
+    OPAQUE_DATA = 99
+
+
+class Flavour(IntEnum):
+    DEFAULT = 0
+    SINGLE_PASS = 0x0008
+
+
 @dataclass(frozen=True, slots=True)
 class ReadOptions:
     read_ahead: int = 1 << 20
     cache_bytes: int = 64 << 20
+
+
+@dataclass(frozen=True, slots=True)
+class TrackSpec:
+    essence_type: EssenceType
+    sampling_rate: int | None = None
+    channel_count: int | None = None
+    quantization_bits: int | None = None
+    stored_width: int | None = None
+    stored_height: int | None = None
+    essence_container_ul: bytes | None = None
+    picture_coding_ul: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ClipSpec:
+    edit_rate: tuple[int, int]
+    tracks: list[TrackSpec] = field(default_factory=list)
+    flavour: Flavour = Flavour.DEFAULT
+    duration: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +97,8 @@ class Frame:
     data: bytes
     element_key: bytes
     file_position: int
+    kl_size: int = 0
+    position: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +151,8 @@ class Clip:
                         data=bytes(frame.data),
                         element_key=bytes(frame.element_key),
                         file_position=frame.file_position,
+                        kl_size=frame.kl_size,
+                        position=frame.position,
                     )
                     for frame in package.frames
                 )
@@ -119,6 +170,38 @@ class Clip:
         self.close()
 
 
+class Writer:
+    """An opened MXF writer. One writer per thread."""
+
+    def __init__(self, native: NativeWriter) -> None:
+        self._native = native
+        self._done = False
+
+    def write(self, track_index: int, data: bytes) -> None:
+        self._native.write(track_index, data)
+
+    def finish(self) -> None:
+        if self._done:
+            return
+        self._done = True
+        self._native.finish()
+
+    def close(self) -> None:
+        if self._done:
+            return
+        self._done = True
+        self._native.close()
+
+    def __enter__(self) -> Writer:
+        return self
+
+    def __exit__(self, exc_type: object, *_exc: object) -> None:
+        if exc_type is None:
+            self.finish()
+        else:
+            self.close()
+
+
 def open_mxf(source: BinarySource, options: ReadOptions | None = None) -> Clip:
     """Open an MXF source. The handle stays alive for the lifetime of the clip."""
     chosen = options or ReadOptions()
@@ -129,3 +212,8 @@ def open_mxf(source: BinarySource, options: ReadOptions | None = None) -> Clip:
             cache_bytes=chosen.cache_bytes,
         )
     )
+
+
+def write_mxf(sink: BinarySink, spec: ClipSpec) -> Writer:
+    """Open an MXF sink. The handle stays alive until finish/close."""
+    return Writer(_write_mxf(sink, spec))
