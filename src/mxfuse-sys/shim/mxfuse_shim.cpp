@@ -11,11 +11,15 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
+#include <limits>
 #include <new>
 #include <string>
+#include <vector>
 
 #include <bmx/BMXException.h>
+#include <bmx/BMXTypes.h>
 #include <bmx/EssenceType.h>
 #include <bmx/clip_writer/ClipWriter.h>
 #include <bmx/clip_writer/ClipWriterTrack.h>
@@ -24,11 +28,18 @@
 #include <bmx/mxf_helper/MXFDescriptorHelper.h>
 #include <bmx/mxf_helper/OpaqueMXFDescriptorHelper.h>
 #include <bmx/mxf_op1a/OP1AFile.h>
+#include <bmx/mxf_op1a/OP1AOpaqueTrack.h>
+#include <bmx/mxf_op1a/OP1AXMLTrack.h>
 #include <bmx/mxf_reader/MXFFileReader.h>
+#include <bmx/mxf_reader/MXFReader.h>
+#include <bmx/mxf_reader/MXFTextObject.h>
 #include <bmx/mxf_reader/MXFTrackInfo.h>
 #include <bmx/mxf_reader/MXFTrackReader.h>
 #include <libMXF++/File.h>
 #include <libMXF++/MXFException.h>
+#include <libMXF++/metadata/GenericPictureEssenceDescriptor.h>
+#include <libMXF++/metadata/RGBAEssenceDescriptor.h>
+#include <libMXF++/metadata/CDCIEssenceDescriptor.h>
 #include <mxf/mxf_cache_file.h>
 #include <mxf/mxf_file.h>
 #include <mxf/mxf_types.h>
@@ -308,6 +319,19 @@ int mxfuse_reader_clip_info(MxfuseReader *reader, MxfuseClipInfo *out, MxfuseErr
         out->edit_rate.den = rate.denominator;
         out->duration = reader->reader->GetDuration();
         out->num_tracks = reader->reader->GetNumTrackReaders();
+        out->has_start_timecode = 0;
+        std::memset(&out->start_timecode, 0, sizeof(out->start_timecode));
+        if (reader->reader->HaveMaterialTimecode()) {
+            bmx::Timecode tc = reader->reader->GetMaterialTimecode(0);
+            if (!tc.IsInvalid()) {
+                out->has_start_timecode = 1;
+                out->start_timecode.hour = tc.GetHour();
+                out->start_timecode.minute = tc.GetMin();
+                out->start_timecode.second = tc.GetSec();
+                out->start_timecode.frame = tc.GetFrame();
+                out->start_timecode.drop_frame = tc.IsDropFrame() ? 1 : 0;
+            }
+        }
         return MXFUSE_OK;
     } catch (const bmx::BMXException &e) {
         set_error(err, e.what());
@@ -339,6 +363,7 @@ int mxfuse_reader_track_info(
         }
         bmx::MXFTrackReader *track = reader->reader->GetTrackReader(index);
         const bmx::MXFTrackInfo *info = track->GetTrackInfo();
+        std::memset(out, 0, sizeof(*out));
         out->index = index;
         out->data_def = static_cast<int32_t>(info->data_def);
         out->essence_type = static_cast<int32_t>(info->essence_type);
@@ -347,6 +372,74 @@ int mxfuse_reader_track_info(
         out->edit_rate.den = info->edit_rate.denominator;
         out->duration = info->duration;
         out->enabled = track->IsEnabled() ? 1 : 0;
+        if (const bmx::MXFPictureTrackInfo *picture = dynamic_cast<const bmx::MXFPictureTrackInfo*>(info)) {
+            copy_ul(out->coding_ul, picture->picture_essence_coding_label);
+            out->stored_width = picture->stored_width;
+            out->stored_height = picture->stored_height;
+            out->display_width = picture->display_width;
+            out->display_height = picture->display_height;
+            out->component_depth = picture->component_depth;
+            out->horiz_subsampling = picture->horiz_subsampling;
+            out->vert_subsampling = picture->vert_subsampling;
+            out->frame_layout = picture->frame_layout;
+            out->aspect_ratio.num = picture->aspect_ratio.numerator;
+            out->aspect_ratio.den = picture->aspect_ratio.denominator;
+            out->descriptor_kind = picture->is_cdci ? MXFUSE_DESCRIPTOR_CDCI : MXFUSE_DESCRIPTOR_RGBA;
+        }
+        if (const bmx::MXFSoundTrackInfo *sound = dynamic_cast<const bmx::MXFSoundTrackInfo*>(info)) {
+            out->sampling_rate = static_cast<uint32_t>(sound->sampling_rate.numerator);
+            out->channel_count = sound->channel_count;
+            out->quantization_bits = sound->bits_per_sample;
+            out->descriptor_kind = MXFUSE_DESCRIPTOR_WAVE;
+        }
+        if (dynamic_cast<const bmx::MXFDataTrackInfo*>(info)) {
+            out->descriptor_kind = MXFUSE_DESCRIPTOR_DATA;
+        }
+        if (mxfpp::FileDescriptor *desc = track->GetFileDescriptor()) {
+            if (mxfpp::GenericPictureEssenceDescriptor *pict =
+                    dynamic_cast<mxfpp::GenericPictureEssenceDescriptor*>(desc)) {
+                if (pict->haveVideoLineMap()) {
+                    std::vector<int32_t> map = pict->getVideoLineMap();
+                    if (map.size() >= 1) {
+                        out->video_line_map[0] = map[0];
+                    }
+                    if (map.size() >= 2) {
+                        out->video_line_map[1] = map[1];
+                    }
+                }
+                if (pict->haveColorPrimaries()) {
+                    copy_ul(out->color_primaries, pict->getColorPrimaries());
+                }
+                if (pict->haveCaptureGamma()) {
+                    copy_ul(out->transfer_characteristic, pict->getCaptureGamma());
+                }
+                if (pict->haveCodingEquations()) {
+                    copy_ul(out->coding_equations, pict->getCodingEquations());
+                }
+                if (pict->havePictureEssenceCoding()) {
+                    copy_ul(out->coding_ul, pict->getPictureEssenceCoding());
+                }
+            }
+            if (mxfpp::RGBAEssenceDescriptor *rgba = dynamic_cast<mxfpp::RGBAEssenceDescriptor*>(desc)) {
+                out->descriptor_kind = MXFUSE_DESCRIPTOR_RGBA;
+                if (rgba->havePixelLayout()) {
+                    mxfRGBALayout layout = rgba->getPixelLayout();
+                    uint8_t count = 0;
+                    for (uint8_t i = 0; i < 8; i++) {
+                        if (layout.components[i].code == 0) {
+                            break;
+                        }
+                        out->pixel_layout[count * 2] = layout.components[i].code;
+                        out->pixel_layout[count * 2 + 1] = layout.components[i].depth;
+                        count++;
+                    }
+                    out->pixel_layout_count = count;
+                }
+            }
+            if (dynamic_cast<mxfpp::CDCIEssenceDescriptor*>(desc)) {
+                out->descriptor_kind = MXFUSE_DESCRIPTOR_CDCI;
+            }
+        }
         return MXFUSE_OK;
     } catch (const bmx::BMXException &e) {
         set_error(err, e.what());
@@ -507,6 +600,97 @@ void mxfuse_frame_free(MxfuseFrameView *view)
     view->size = 0;
 }
 
+int mxfuse_reader_num_xml(MxfuseReader *reader, size_t *out, MxfuseError *err)
+{
+    if (!reader || !reader->reader || !out) {
+        set_error(err, "invalid arguments to mxfuse_reader_num_xml");
+        return MXFUSE_ERR;
+    }
+    try {
+        *out = reader->reader->GetNumTextObjects();
+        return MXFUSE_OK;
+    } catch (const bmx::BMXException &e) {
+        set_error(err, e.what());
+        return MXFUSE_ERR;
+    } catch (const mxfpp::MXFException &e) {
+        set_error(err, e.getMessage().c_str());
+        return MXFUSE_ERR;
+    } catch (...) {
+        set_error(err, "unknown error counting XML objects");
+        return MXFUSE_ERR;
+    }
+}
+
+int mxfuse_reader_xml(
+    MxfuseReader *reader,
+    size_t index,
+    MxfuseXmlView *out,
+    MxfuseError *err
+)
+{
+    if (!reader || !reader->reader || !out) {
+        set_error(err, "invalid arguments to mxfuse_reader_xml");
+        return MXFUSE_ERR;
+    }
+    std::memset(out, 0, sizeof(*out));
+    try {
+        if (index >= reader->reader->GetNumTextObjects()) {
+            set_error(err, "xml index out of range");
+            return MXFUSE_ERR;
+        }
+        bmx::MXFTextObject *obj = reader->reader->GetTextObject(index);
+        if (!obj) {
+            set_error(err, "xml object is null");
+            return MXFUSE_ERR;
+        }
+        unsigned char *raw = 0;
+        size_t raw_size = 0;
+        obj->Read(&raw, &raw_size);
+        if (raw && raw_size > 0) {
+            if (raw_size > std::numeric_limits<uint32_t>::max()) {
+                delete[] raw;
+                set_error(err, "xml payload exceeds u32");
+                return MXFUSE_ERR;
+            }
+            uint8_t *copy = static_cast<uint8_t *>(std::malloc(raw_size));
+            if (!copy) {
+                delete[] raw;
+                set_error(err, "out of memory copying xml");
+                return MXFUSE_ERR;
+            }
+            std::memcpy(copy, raw, raw_size);
+            out->data = copy;
+            out->size = static_cast<uint32_t>(raw_size);
+        }
+        delete[] raw;
+        copy_ul(out->scheme_id, obj->GetSchemeId());
+        std::snprintf(out->language, MXFUSE_XML_LANG_LEN, "%s", obj->GetLanguageCode().c_str());
+        std::snprintf(out->mime_type, MXFUSE_XML_MIME_LEN, "%s", obj->GetMimeType().c_str());
+        std::snprintf(out->ns, MXFUSE_XML_NS_LEN, "%s", obj->GetTextDataDescription().c_str());
+        out->is_xml = obj->IsXML() ? 1 : 0;
+        return MXFUSE_OK;
+    } catch (const bmx::BMXException &e) {
+        set_error(err, e.what());
+        return MXFUSE_ERR;
+    } catch (const mxfpp::MXFException &e) {
+        set_error(err, e.getMessage().c_str());
+        return MXFUSE_ERR;
+    } catch (...) {
+        set_error(err, "unknown error reading xml");
+        return MXFUSE_ERR;
+    }
+}
+
+void mxfuse_xml_free(MxfuseXmlView *view)
+{
+    if (!view) {
+        return;
+    }
+    std::free(view->data);
+    view->data = 0;
+    view->size = 0;
+}
+
 const char *mxfuse_essence_type_name(int32_t essence_type)
 {
     return bmx::essence_type_to_enum_string(static_cast<bmx::EssenceType>(essence_type));
@@ -589,6 +773,115 @@ int mxfuse_writer_open(
     }
 }
 
+static mxfUUID uuid_from_bytes(const uint8_t src[MXFUSE_UL_LEN])
+{
+    mxfUUID uuid;
+    std::memcpy(&uuid, src, MXFUSE_UL_LEN);
+    return uuid;
+}
+
+static mxfUMID umid_from_bytes(const uint8_t src[MXFUSE_UMID_LEN])
+{
+    mxfUMID umid;
+    std::memcpy(&umid, src, MXFUSE_UMID_LEN);
+    return umid;
+}
+
+int mxfuse_writer_configure(
+    MxfuseWriter *writer,
+    const MxfuseClipOptions *options,
+    MxfuseError *err
+)
+{
+    if (!writer || !writer->clip || !options) {
+        set_error(err, "invalid arguments to mxfuse_writer_configure");
+        return MXFUSE_ERR;
+    }
+    try {
+        bmx::OP1AFile *op1a = writer->clip->GetOP1AClip();
+        if (!op1a) {
+            set_error(err, "clip options require an OP1a writer");
+            return MXFUSE_ERR;
+        }
+        if (options->flags & MXFUSE_CLIP_HAS_START_TIMECODE) {
+            bmx::Rational rate = writer->clip->GetFrameRate();
+            bmx::Timecode tc(
+                rate,
+                options->start_timecode.drop_frame != 0,
+                options->start_timecode.hour,
+                options->start_timecode.minute,
+                options->start_timecode.second,
+                options->start_timecode.frame
+            );
+            writer->clip->SetStartTimecode(tc);
+        }
+        if (options->flags & MXFUSE_CLIP_HAS_TIMECODE_TRACK) {
+            op1a->SetAddTimecodeTrack(options->timecode_track != 0);
+        }
+        if (options->flags & MXFUSE_CLIP_HAS_SYSTEM_ITEM) {
+            op1a->SetAddSystemItem(options->system_item != 0);
+        }
+        bool have_product = (options->flags & (
+            MXFUSE_CLIP_HAS_COMPANY |
+            MXFUSE_CLIP_HAS_PRODUCT |
+            MXFUSE_CLIP_HAS_VERSION_STRING |
+            MXFUSE_CLIP_HAS_PRODUCT_VERSION |
+            MXFUSE_CLIP_HAS_PRODUCT_UID
+        )) != 0;
+        if (have_product) {
+            mxfProductVersion version = {0, 0, 0, 0, 0};
+            if (options->flags & MXFUSE_CLIP_HAS_PRODUCT_VERSION) {
+                version.major = options->product_version[0];
+                version.minor = options->product_version[1];
+                version.patch = options->product_version[2];
+                version.build = options->product_version[3];
+                version.release = options->product_version[4];
+            }
+            mxfUUID product_uid = g_Null_UUID;
+            if (options->flags & MXFUSE_CLIP_HAS_PRODUCT_UID) {
+                product_uid = uuid_from_bytes(options->product_uid);
+            }
+            writer->clip->SetProductInfo(
+                options->company_name,
+                options->product_name,
+                version,
+                options->version_string,
+                product_uid
+            );
+        }
+        if (options->flags & MXFUSE_CLIP_HAS_CREATION_DATE) {
+            mxfTimestamp ts;
+            ts.year = options->creation_year;
+            ts.month = options->creation_month;
+            ts.day = options->creation_day;
+            ts.hour = options->creation_hour;
+            ts.min = options->creation_min;
+            ts.sec = options->creation_sec;
+            ts.qmsec = options->creation_qmsec;
+            writer->clip->SetCreationDate(ts);
+        }
+        if (options->flags & MXFUSE_CLIP_HAS_GENERATION_UID) {
+            op1a->SetGenerationUID(uuid_from_bytes(options->generation_uid));
+        }
+        if (options->flags & MXFUSE_CLIP_HAS_MATERIAL_UID) {
+            op1a->SetMaterialPackageUID(umid_from_bytes(options->material_package_uid));
+        }
+        if (options->flags & MXFUSE_CLIP_HAS_FILE_SOURCE_UID) {
+            op1a->SetFileSourcePackageUID(umid_from_bytes(options->file_source_package_uid));
+        }
+        return MXFUSE_OK;
+    } catch (const bmx::BMXException &e) {
+        set_error(err, e.what());
+        return MXFUSE_ERR;
+    } catch (const mxfpp::MXFException &e) {
+        set_error(err, e.getMessage().c_str());
+        return MXFUSE_ERR;
+    } catch (...) {
+        set_error(err, "unknown error configuring writer");
+        return MXFUSE_ERR;
+    }
+}
+
 int mxfuse_writer_create_track(
     MxfuseWriter *writer,
     const MxfuseTrackSpec *spec,
@@ -642,6 +935,53 @@ int mxfuse_writer_create_track(
             if (spec->flags & MXFUSE_TRACK_HAS_QUANT_BITS) {
                 opaque->SetQuantizationBits(spec->quantization_bits);
             }
+            if (spec->flags & MXFUSE_TRACK_HAS_DESCRIPTOR) {
+                opaque->SetDescriptorKind(spec->descriptor_kind);
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_COMPONENT_DEPTH) {
+                opaque->SetComponentDepth(spec->component_depth);
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_SUBSAMPLING) {
+                opaque->SetHorizontalSubsampling(spec->horiz_subsampling);
+                opaque->SetVerticalSubsampling(spec->vert_subsampling);
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_FRAME_LAYOUT) {
+                opaque->SetFrameLayout(spec->frame_layout);
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_ASPECT_RATIO) {
+                mxfRational ratio;
+                ratio.numerator = spec->aspect_ratio.num;
+                ratio.denominator = spec->aspect_ratio.den;
+                opaque->SetAspectRatio(ratio);
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_VIDEO_LINE_MAP) {
+                opaque->SetVideoLineMap(spec->video_line_map[0], spec->video_line_map[1]);
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_PIXEL_LAYOUT) {
+                opaque->SetPixelLayout(spec->pixel_layout, spec->pixel_layout_count);
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_COLOR_PRIMARIES) {
+                opaque->SetColorPrimaries(ul_from_bytes(spec->color_primaries));
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_TRANSFER) {
+                opaque->SetTransferCharacteristic(ul_from_bytes(spec->transfer_characteristic));
+            }
+            if (spec->flags & MXFUSE_TRACK_HAS_CODING_EQ) {
+                opaque->SetCodingEquations(ul_from_bytes(spec->coding_equations));
+            }
+        }
+        if (bmx::OP1ATrack *op1a_track = track->GetOP1ATrack()) {
+            if (bmx::OP1AOpaqueTrack *opaque_track = dynamic_cast<bmx::OP1AOpaqueTrack*>(op1a_track)) {
+                if (spec->flags & MXFUSE_TRACK_HAS_ELEMENT_TYPE) {
+                    opaque_track->SetElementType(spec->element_type);
+                }
+                if (spec->flags & MXFUSE_TRACK_HAS_ELEMENT_LLEN) {
+                    opaque_track->SetElementLLen(spec->element_llen);
+                }
+                if (spec->flags & MXFUSE_TRACK_HAS_TEMPORAL_REORDER) {
+                    opaque_track->SetTemporalReordering(spec->temporal_reordering != 0);
+                }
+            }
         }
         *out_index = writer->clip->GetNumTracks() - 1;
         return MXFUSE_OK;
@@ -653,6 +993,54 @@ int mxfuse_writer_create_track(
         return MXFUSE_ERR;
     } catch (...) {
         set_error(err, "unknown error creating track");
+        return MXFUSE_ERR;
+    }
+}
+
+int mxfuse_writer_add_xml(
+    MxfuseWriter *writer,
+    const uint8_t *data,
+    uint32_t size,
+    const uint8_t *scheme_id,
+    const char *language,
+    const char *ns,
+    MxfuseError *err
+)
+{
+    if (!writer || !writer->clip || !data || size == 0) {
+        set_error(err, "invalid arguments to mxfuse_writer_add_xml");
+        return MXFUSE_ERR;
+    }
+    try {
+        bmx::OP1AFile *op1a = writer->clip->GetOP1AClip();
+        if (!op1a) {
+            set_error(err, "XML metadata requires an OP1a writer");
+            return MXFUSE_ERR;
+        }
+        bmx::OP1AXMLTrack *xml = op1a->CreateXMLTrack();
+        xml->SetSource(data, size, true);
+        xml->SetTextEncoding(bmx::UTF8);
+        if (scheme_id) {
+            xml->SetSchemeId(ul_from_bytes(scheme_id));
+        }
+        if (language && language[0]) {
+            xml->SetLanguageCode(language);
+        }
+        if (ns && ns[0]) {
+            xml->SetNamespace(ns);
+        }
+        return MXFUSE_OK;
+    } catch (const bmx::BMXException &e) {
+        set_error(err, e.what());
+        return MXFUSE_ERR;
+    } catch (const mxfpp::MXFException &e) {
+        set_error(err, e.getMessage().c_str());
+        return MXFUSE_ERR;
+    } catch (const std::exception &e) {
+        set_error(err, e.what());
+        return MXFUSE_ERR;
+    } catch (...) {
+        set_error(err, "unknown error adding xml");
         return MXFUSE_ERR;
     }
 }
