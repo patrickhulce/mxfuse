@@ -3,6 +3,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use mxfuse::{write_mxf, ByteSink, ClipSpec, EssenceType, Flavour, Rational, TrackSpec};
 
+// libMXF++ UTF-16 conversion is process-global; serialize writers in this binary.
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
+
 pub const PICTURE_PAYLOAD: usize = 4096;
 pub const SMALL_EDIT_UNITS: i64 = 2_000;
 pub const LARGE_EDIT_UNITS: i64 = 8_000;
@@ -74,6 +77,9 @@ pub fn pcm_bytes_per_edit_unit() -> usize {
 
 /// Build an OP1a clip with opaque picture and WAVE_PCM tracks.
 pub fn synthetic(edit_units: i64, payload_bytes: usize) -> Vec<u8> {
+    let _guard = WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let shared = SharedCursor::new();
     let spec = ClipSpec {
         edit_rate: Rational {

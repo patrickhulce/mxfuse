@@ -4,8 +4,8 @@ Today we're proud to release `mxfuse`, a rust-python-node library that enables e
 
 With `mxfuse`, you can extract a single frame of a remote 500 GB IMF by reading only a few MB. 
 With `mxfuse`, you can wrap a clip in your company's proprietary image codec. 
-With `mxfuse`, you can reproduce any Generic Container mapping exactly — element key, BER length, descriptor class, and every descriptor field. 
-With `mxfuse`, you can read that mapping back: the picture coding UL and the full descriptor survive a round trip. 
+With `mxfuse`, you can reproduce any Generic Container mapping exactly — element key, BER length, descriptor class, and the writable descriptor fields. 
+With `mxfuse`, you can read that mapping back: the coding UL and the descriptor survive a round trip. 
 With `mxfuse`, you can pin product info, creation date, generation UID, and package UMIDs so Identification and package identity stay under your control. 
 With `mxfuse`, you can stream a well-formed OP1a file to ffplay in a single pass.
 
@@ -14,6 +14,7 @@ With `mxfuse`, you can stream a well-formed OP1a file to ffplay in a single pass
 
 - **OP1a, frame-wrapped only** for v1. No AS-02, IMF flavour, RDD 9, D-10, Avid OP-Atom, or clip wrapping as a write target.
 - **No sub-descriptors.** A private mapping that needs a registered sub-descriptor set (JPEG 2000, JPEG XS, or a future `JXLPictureSubDescriptor`) cannot write or read those items yet.
+- **Display and sampled geometry follow stored width/height** on write. They are not independently settable.
 - **Essence in, essence out.** No image codec decode or encode. A "frame" is the KLV payload with the key and length stripped.
 - **Synchronous core.** One reader per thread. Sharing a single reader across threads requires external locking; bmx mutates position, frame buffers, and index caches on every `Read()`.
 - **Single-pass streamable write** (`Flavour.SINGLE_PASS`) requires a known duration, a constant-bytes-per-element codec, partition interval 0, and no timed text. JPEG 2000 and ProRes are typically variable-frame-size and will not produce a closed-complete header in one pass.

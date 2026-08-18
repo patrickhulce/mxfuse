@@ -5,9 +5,9 @@ a statically linked [bmx](https://github.com/ebu/bmx) core.
 
 Essence goes in and essence comes out. A frame is the KLV payload with the key
 and length stripped. You can reproduce any Generic Container mapping exactly —
-element key, BER length, descriptor class, and every descriptor field — and
-read that mapping back: the picture coding UL and the full descriptor survive
-a round trip. Pin product info, creation date, generation UID, and package
+element key, BER length, descriptor class, and the writable descriptor fields —
+and read that mapping back: the coding UL and the descriptor survive a round
+trip. Pin product info, creation date, generation UID, and package
 UMIDs on write. The core is synchronous: one reader or writer per thread.
 
 ```bash
@@ -104,6 +104,10 @@ spec = ClipSpec(
         ),
     ],
 )
+
+with open("output.mxf", "wb") as f, write_mxf(f, spec) as clip:
+    for image in images:
+        clip.write_unit(image)
 ```
 
 ### Node

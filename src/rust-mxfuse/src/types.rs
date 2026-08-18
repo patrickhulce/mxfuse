@@ -113,7 +113,12 @@ pub struct Timecode {
     pub drop_frame: bool,
 }
 
-/// Writer Identification and package UIDs. Unset fields keep bmx's generated values.
+/// Writer Identification and package UIDs.
+///
+/// Creation date, generation UID, and package UMIDs that are `None` keep
+/// bmx's generated values. Company/product/version/product UID are applied
+/// as one `SetProductInfo` call: if any of those is set, the rest of that
+/// group is written as empty / null rather than left as bmx defaults.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Identity {
     pub company_name: Option<String>,
@@ -262,6 +267,9 @@ impl TrackSpec {
 }
 
 /// Clip-level XML (ST 434 / generic stream), not an essence track.
+///
+/// `mime_type` and `is_xml` are populated on read. On write, the payload is
+/// always stored as UTF-8 XML; `mime_type` is ignored.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct XmlMetadata {
     pub data: Vec<u8>,

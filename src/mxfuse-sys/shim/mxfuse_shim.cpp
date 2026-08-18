@@ -38,6 +38,8 @@
 #include <libMXF++/File.h>
 #include <libMXF++/MXFException.h>
 #include <libMXF++/metadata/GenericPictureEssenceDescriptor.h>
+#include <libMXF++/metadata/GenericSoundEssenceDescriptor.h>
+#include <libMXF++/metadata/GenericDataEssenceDescriptor.h>
 #include <libMXF++/metadata/RGBAEssenceDescriptor.h>
 #include <libMXF++/metadata/CDCIEssenceDescriptor.h>
 #include <mxf/mxf_cache_file.h>
@@ -418,6 +420,18 @@ int mxfuse_reader_track_info(
                 }
                 if (pict->havePictureEssenceCoding()) {
                     copy_ul(out->coding_ul, pict->getPictureEssenceCoding());
+                }
+            }
+            if (mxfpp::GenericSoundEssenceDescriptor *sound_desc =
+                    dynamic_cast<mxfpp::GenericSoundEssenceDescriptor*>(desc)) {
+                if (sound_desc->haveSoundEssenceCompression()) {
+                    copy_ul(out->coding_ul, sound_desc->getSoundEssenceCompression());
+                }
+            }
+            if (mxfpp::GenericDataEssenceDescriptor *data_desc =
+                    dynamic_cast<mxfpp::GenericDataEssenceDescriptor*>(desc)) {
+                if (data_desc->haveDataEssenceCoding()) {
+                    copy_ul(out->coding_ul, data_desc->getDataEssenceCoding());
                 }
             }
             if (mxfpp::RGBAEssenceDescriptor *rgba = dynamic_cast<mxfpp::RGBAEssenceDescriptor*>(desc)) {
