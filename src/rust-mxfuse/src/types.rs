@@ -39,6 +39,11 @@ pub struct EssenceType(pub i32);
 
 impl EssenceType {
     pub const UNKNOWN: Self = Self(0);
+    pub const UNC_HD_1080P: Self = Self(35);
+    pub const WAVE_PCM: Self = Self(90);
+    pub const OPAQUE_PICTURE: Self = Self(97);
+    pub const OPAQUE_SOUND: Self = Self(98);
+    pub const OPAQUE_DATA: Self = Self(99);
 
     pub fn from_i32(value: i32) -> Self {
         Self(value)
@@ -108,4 +113,57 @@ impl Default for ReadOptions {
             cache_bytes: 64 << 20,
         }
     }
+}
+
+/// OP1a flavour flags. `SINGLE_PASS` writes a closed-complete header and never
+/// seeks backward.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Flavour(pub i32);
+
+impl Flavour {
+    pub const DEFAULT: Self = Self(0);
+    pub const SINGLE_PASS: Self = Self(0x0008);
+}
+
+impl Default for Flavour {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// One output track. Opaque types require container / coding ULs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrackSpec {
+    pub essence_type: EssenceType,
+    pub sampling_rate: Option<u32>,
+    pub channel_count: Option<u32>,
+    pub quantization_bits: Option<u32>,
+    pub stored_width: Option<u32>,
+    pub stored_height: Option<u32>,
+    pub essence_container_ul: Option<[u8; 16]>,
+    pub picture_coding_ul: Option<[u8; 16]>,
+}
+
+impl TrackSpec {
+    pub fn new(essence_type: EssenceType) -> Self {
+        Self {
+            essence_type,
+            sampling_rate: None,
+            channel_count: None,
+            quantization_bits: None,
+            stored_width: None,
+            stored_height: None,
+            essence_container_ul: None,
+            picture_coding_ul: None,
+        }
+    }
+}
+
+/// Clip-level write specification. Duration is required for single-pass.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClipSpec {
+    pub edit_rate: Rational,
+    pub flavour: Flavour,
+    pub duration: Option<i64>,
+    pub tracks: Vec<TrackSpec>,
 }
