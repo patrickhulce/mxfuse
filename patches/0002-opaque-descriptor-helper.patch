@@ -39,7 +39,7 @@
      bmx/mxf_helper/PictureMXFDescriptorHelper.h
 --- a/include/bmx/mxf_helper/OpaqueMXFDescriptorHelper.h
 +++ b/include/bmx/mxf_helper/OpaqueMXFDescriptorHelper.h
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,105 @@
 +/*
 + * Copyright (C) 2026, mxfuse contributors
 + * SPDX-License-Identifier: BSD-3-Clause
@@ -57,6 +57,16 @@
 +
 +namespace bmx
 +{
++
++
++enum OpaqueDescriptorKind
++{
++    OPAQUE_DESC_DEFAULT = 0,
++    OPAQUE_DESC_CDCI    = 1,
++    OPAQUE_DESC_RGBA    = 2,
++    OPAQUE_DESC_WAVE    = 3,
++    OPAQUE_DESC_DATA    = 4,
++};
 +
 +
 +class OpaqueMXFDescriptorHelper : public MXFDescriptorHelper
@@ -81,6 +91,17 @@
 +    void SetSamplingRate(mxfRational sampling_rate);
 +    void SetChannelCount(uint32_t count);
 +    void SetQuantizationBits(uint32_t bits);
++    void SetDescriptorKind(int kind);
++    void SetComponentDepth(uint32_t depth);
++    void SetHorizontalSubsampling(uint32_t value);
++    void SetVerticalSubsampling(uint32_t value);
++    void SetFrameLayout(uint8_t layout);
++    void SetAspectRatio(mxfRational aspect_ratio);
++    void SetVideoLineMap(int32_t first, int32_t second);
++    void SetPixelLayout(const uint8_t *components, uint8_t count);
++    void SetColorPrimaries(mxfUL label);
++    void SetTransferCharacteristic(mxfUL label);
++    void SetCodingEquations(mxfUL label);
 +
 +    virtual mxfpp::FileDescriptor* CreateFileDescriptor(mxfpp::HeaderMetadata *header_metadata);
 +    virtual void UpdateFileDescriptor();
@@ -90,6 +111,8 @@
 +    virtual mxfUL ChooseEssenceContainerUL() const;
 +
 +private:
++    int ResolvedDescriptorKind() const;
++
 +    mxfUL mEssenceContainerUL;
 +    mxfUL mCodingUL;
 +    uint32_t mStoredWidth;
@@ -97,6 +120,23 @@
 +    mxfRational mSamplingRate;
 +    uint32_t mChannelCount;
 +    uint32_t mQuantizationBits;
++    int mDescriptorKind;
++    uint32_t mComponentDepth;
++    uint32_t mHorizSubsampling;
++    uint32_t mVertSubsampling;
++    uint8_t mFrameLayout;
++    bool mHaveAspectRatio;
++    mxfRational mAspectRatio;
++    bool mHaveVideoLineMap;
++    int32_t mVideoLineMap[2];
++    bool mHavePixelLayout;
++    mxfRGBALayout mPixelLayout;
++    bool mHaveColorPrimaries;
++    mxfUL mColorPrimaries;
++    bool mHaveTransferCharacteristic;
++    mxfUL mTransferCharacteristic;
++    bool mHaveCodingEquations;
++    mxfUL mCodingEquations;
 +};
 +
 +
@@ -107,7 +147,7 @@
 +#endif
 --- a/src/mxf_helper/OpaqueMXFDescriptorHelper.cpp
 +++ b/src/mxf_helper/OpaqueMXFDescriptorHelper.cpp
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,298 @@
 +/*
 + * Copyright (C) 2026, mxfuse contributors
 + * SPDX-License-Identifier: BSD-3-Clause
@@ -116,6 +156,8 @@
 +#ifdef HAVE_CONFIG_H
 +#include "config.h"
 +#endif
++
++#include <cstring>
 +
 +#include <bmx/mxf_helper/OpaqueMXFDescriptorHelper.h>
 +#include <bmx/BMXTypes.h>
@@ -156,6 +198,24 @@
 +    mSamplingRate = SAMPLING_RATE_48K;
 +    mChannelCount = 1;
 +    mQuantizationBits = 16;
++    mDescriptorKind = OPAQUE_DESC_DEFAULT;
++    mComponentDepth = 8;
++    mHorizSubsampling = 2;
++    mVertSubsampling = 1;
++    mFrameLayout = MXF_FULL_FRAME;
++    mHaveAspectRatio = false;
++    mAspectRatio = ASPECT_RATIO_16_9;
++    mHaveVideoLineMap = false;
++    mVideoLineMap[0] = 1;
++    mVideoLineMap[1] = 0;
++    mHavePixelLayout = false;
++    memset(&mPixelLayout, 0, sizeof(mPixelLayout));
++    mHaveColorPrimaries = false;
++    mColorPrimaries = g_Null_UL;
++    mHaveTransferCharacteristic = false;
++    mTransferCharacteristic = g_Null_UL;
++    mHaveCodingEquations = false;
++    mCodingEquations = g_Null_UL;
 +}
 +
 +OpaqueMXFDescriptorHelper::~OpaqueMXFDescriptorHelper()
@@ -212,14 +272,101 @@
 +    mQuantizationBits = bits;
 +}
 +
++void OpaqueMXFDescriptorHelper::SetDescriptorKind(int kind)
++{
++    mDescriptorKind = kind;
++}
++
++void OpaqueMXFDescriptorHelper::SetComponentDepth(uint32_t depth)
++{
++    mComponentDepth = depth;
++}
++
++void OpaqueMXFDescriptorHelper::SetHorizontalSubsampling(uint32_t value)
++{
++    mHorizSubsampling = value;
++}
++
++void OpaqueMXFDescriptorHelper::SetVerticalSubsampling(uint32_t value)
++{
++    mVertSubsampling = value;
++}
++
++void OpaqueMXFDescriptorHelper::SetFrameLayout(uint8_t layout)
++{
++    mFrameLayout = layout;
++}
++
++void OpaqueMXFDescriptorHelper::SetAspectRatio(mxfRational aspect_ratio)
++{
++    mHaveAspectRatio = true;
++    mAspectRatio = aspect_ratio;
++}
++
++void OpaqueMXFDescriptorHelper::SetVideoLineMap(int32_t first, int32_t second)
++{
++    mHaveVideoLineMap = true;
++    mVideoLineMap[0] = first;
++    mVideoLineMap[1] = second;
++}
++
++void OpaqueMXFDescriptorHelper::SetPixelLayout(const uint8_t *components, uint8_t count)
++{
++    mHavePixelLayout = true;
++    memset(&mPixelLayout, 0, sizeof(mPixelLayout));
++    if (!components)
++        return;
++    uint8_t n = count > 8 ? 8 : count;
++    for (uint8_t i = 0; i < n; i++) {
++        mPixelLayout.components[i].code = components[i * 2];
++        mPixelLayout.components[i].depth = components[i * 2 + 1];
++    }
++}
++
++void OpaqueMXFDescriptorHelper::SetColorPrimaries(mxfUL label)
++{
++    mHaveColorPrimaries = true;
++    mColorPrimaries = label;
++}
++
++void OpaqueMXFDescriptorHelper::SetTransferCharacteristic(mxfUL label)
++{
++    mHaveTransferCharacteristic = true;
++    mTransferCharacteristic = label;
++}
++
++void OpaqueMXFDescriptorHelper::SetCodingEquations(mxfUL label)
++{
++    mHaveCodingEquations = true;
++    mCodingEquations = label;
++}
++
++int OpaqueMXFDescriptorHelper::ResolvedDescriptorKind() const
++{
++    if (mDescriptorKind != OPAQUE_DESC_DEFAULT)
++        return mDescriptorKind;
++    if (mEssenceType == OPAQUE_SOUND)
++        return OPAQUE_DESC_WAVE;
++    if (mEssenceType == OPAQUE_DATA)
++        return OPAQUE_DESC_DATA;
++    return OPAQUE_DESC_CDCI;
++}
++
 +FileDescriptor* OpaqueMXFDescriptorHelper::CreateFileDescriptor(HeaderMetadata *header_metadata)
 +{
-+    if (mEssenceType == OPAQUE_SOUND) {
-+        mFileDescriptor = new WaveAudioDescriptor(header_metadata);
-+    } else if (mEssenceType == OPAQUE_DATA) {
-+        mFileDescriptor = new GenericDataEssenceDescriptor(header_metadata);
-+    } else {
-+        mFileDescriptor = new CDCIEssenceDescriptor(header_metadata);
++    switch (ResolvedDescriptorKind()) {
++        case OPAQUE_DESC_WAVE:
++            mFileDescriptor = new WaveAudioDescriptor(header_metadata);
++            break;
++        case OPAQUE_DESC_DATA:
++            mFileDescriptor = new GenericDataEssenceDescriptor(header_metadata);
++            break;
++        case OPAQUE_DESC_RGBA:
++            mFileDescriptor = new RGBAEssenceDescriptor(header_metadata);
++            break;
++        default:
++            mFileDescriptor = new CDCIEssenceDescriptor(header_metadata);
++            break;
 +    }
 +    UpdateFileDescriptor();
 +    return mFileDescriptor;
@@ -229,7 +376,7 @@
 +{
 +    MXFDescriptorHelper::UpdateFileDescriptor();
 +
-+    if (mEssenceType == OPAQUE_SOUND) {
++    if (ResolvedDescriptorKind() == OPAQUE_DESC_WAVE) {
 +        WaveAudioDescriptor *wav = dynamic_cast<WaveAudioDescriptor*>(mFileDescriptor);
 +        BMX_ASSERT(wav);
 +        uint32_t bytes_per_sample = mChannelCount * ((mQuantizationBits + 7) / 8);
@@ -244,7 +391,7 @@
 +        return;
 +    }
 +
-+    if (mEssenceType == OPAQUE_DATA) {
++    if (ResolvedDescriptorKind() == OPAQUE_DESC_DATA) {
 +        GenericDataEssenceDescriptor *data = dynamic_cast<GenericDataEssenceDescriptor*>(mFileDescriptor);
 +        BMX_ASSERT(data);
 +        if (!mxf_equals_ul(&mCodingUL, &g_Null_UL))
@@ -252,20 +399,42 @@
 +        return;
 +    }
 +
-+    CDCIEssenceDescriptor *cdci = dynamic_cast<CDCIEssenceDescriptor*>(mFileDescriptor);
-+    BMX_ASSERT(cdci);
-+    cdci->setStoredWidth(mStoredWidth);
-+    cdci->setStoredHeight(mStoredHeight);
-+    cdci->setSampledWidth(mStoredWidth);
-+    cdci->setSampledHeight(mStoredHeight);
-+    cdci->setDisplayWidth(mStoredWidth);
-+    cdci->setDisplayHeight(mStoredHeight);
-+    cdci->setComponentDepth(8);
-+    cdci->setHorizontalSubsampling(2);
-+    cdci->setVerticalSubsampling(1);
-+    cdci->setFrameLayout(MXF_FULL_FRAME);
++    GenericPictureEssenceDescriptor *pict = dynamic_cast<GenericPictureEssenceDescriptor*>(mFileDescriptor);
++    BMX_ASSERT(pict);
++    pict->setStoredWidth(mStoredWidth);
++    pict->setStoredHeight(mStoredHeight);
++    pict->setSampledWidth(mStoredWidth);
++    pict->setSampledHeight(mStoredHeight);
++    pict->setSampledXOffset(0);
++    pict->setSampledYOffset(0);
++    pict->setDisplayWidth(mStoredWidth);
++    pict->setDisplayHeight(mStoredHeight);
++    pict->setDisplayXOffset(0);
++    pict->setDisplayYOffset(0);
++    pict->setFrameLayout(mFrameLayout);
 +    if (!mxf_equals_ul(&mCodingUL, &g_Null_UL))
-+        cdci->setPictureEssenceCoding(mCodingUL);
++        pict->setPictureEssenceCoding(mCodingUL);
++    if (mHaveAspectRatio)
++        pict->setAspectRatio(mAspectRatio);
++    if (mHaveVideoLineMap)
++        pict->setVideoLineMap(mVideoLineMap[0], mVideoLineMap[1]);
++    if (mHaveColorPrimaries)
++        pict->setColorPrimaries(mColorPrimaries);
++    if (mHaveTransferCharacteristic)
++        pict->setCaptureGamma(mTransferCharacteristic);
++    if (mHaveCodingEquations)
++        pict->setCodingEquations(mCodingEquations);
++
++    CDCIEssenceDescriptor *cdci = dynamic_cast<CDCIEssenceDescriptor*>(mFileDescriptor);
++    if (cdci) {
++        cdci->setComponentDepth(mComponentDepth);
++        cdci->setHorizontalSubsampling(mHorizSubsampling);
++        cdci->setVerticalSubsampling(mVertSubsampling);
++    }
++
++    RGBAEssenceDescriptor *rgba = dynamic_cast<RGBAEssenceDescriptor*>(mFileDescriptor);
++    if (rgba && mHavePixelLayout)
++        rgba->setPixelLayout(mPixelLayout);
 +}
 +
 +uint32_t OpaqueMXFDescriptorHelper::GetSampleSize()

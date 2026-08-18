@@ -49,6 +49,16 @@ namespace bmx
 {
 
 
+enum OpaqueDescriptorKind
+{
+    OPAQUE_DESC_DEFAULT = 0,
+    OPAQUE_DESC_CDCI    = 1,
+    OPAQUE_DESC_RGBA    = 2,
+    OPAQUE_DESC_WAVE    = 3,
+    OPAQUE_DESC_DATA    = 4,
+};
+
+
 class OpaqueMXFDescriptorHelper : public MXFDescriptorHelper
 {
 public:
@@ -71,6 +81,17 @@ public:
     void SetSamplingRate(mxfRational sampling_rate);
     void SetChannelCount(uint32_t count);
     void SetQuantizationBits(uint32_t bits);
+    void SetDescriptorKind(int kind);
+    void SetComponentDepth(uint32_t depth);
+    void SetHorizontalSubsampling(uint32_t value);
+    void SetVerticalSubsampling(uint32_t value);
+    void SetFrameLayout(uint8_t layout);
+    void SetAspectRatio(mxfRational aspect_ratio);
+    void SetVideoLineMap(int32_t first, int32_t second);
+    void SetPixelLayout(const uint8_t *components, uint8_t count);
+    void SetColorPrimaries(mxfUL label);
+    void SetTransferCharacteristic(mxfUL label);
+    void SetCodingEquations(mxfUL label);
 
     virtual mxfpp::FileDescriptor* CreateFileDescriptor(mxfpp::HeaderMetadata *header_metadata);
     virtual void UpdateFileDescriptor();
@@ -80,6 +101,8 @@ protected:
     virtual mxfUL ChooseEssenceContainerUL() const;
 
 private:
+    int ResolvedDescriptorKind() const;
+
     mxfUL mEssenceContainerUL;
     mxfUL mCodingUL;
     uint32_t mStoredWidth;
@@ -87,6 +110,23 @@ private:
     mxfRational mSamplingRate;
     uint32_t mChannelCount;
     uint32_t mQuantizationBits;
+    int mDescriptorKind;
+    uint32_t mComponentDepth;
+    uint32_t mHorizSubsampling;
+    uint32_t mVertSubsampling;
+    uint8_t mFrameLayout;
+    bool mHaveAspectRatio;
+    mxfRational mAspectRatio;
+    bool mHaveVideoLineMap;
+    int32_t mVideoLineMap[2];
+    bool mHavePixelLayout;
+    mxfRGBALayout mPixelLayout;
+    bool mHaveColorPrimaries;
+    mxfUL mColorPrimaries;
+    bool mHaveTransferCharacteristic;
+    mxfUL mTransferCharacteristic;
+    bool mHaveCodingEquations;
+    mxfUL mCodingEquations;
 };
 
 
@@ -105,6 +145,8 @@ OPAQUE_HELPER_CPP = r'''/*
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
+#include <cstring>
 
 #include <bmx/mxf_helper/OpaqueMXFDescriptorHelper.h>
 #include <bmx/BMXTypes.h>
@@ -145,6 +187,24 @@ OpaqueMXFDescriptorHelper::OpaqueMXFDescriptorHelper()
     mSamplingRate = SAMPLING_RATE_48K;
     mChannelCount = 1;
     mQuantizationBits = 16;
+    mDescriptorKind = OPAQUE_DESC_DEFAULT;
+    mComponentDepth = 8;
+    mHorizSubsampling = 2;
+    mVertSubsampling = 1;
+    mFrameLayout = MXF_FULL_FRAME;
+    mHaveAspectRatio = false;
+    mAspectRatio = ASPECT_RATIO_16_9;
+    mHaveVideoLineMap = false;
+    mVideoLineMap[0] = 1;
+    mVideoLineMap[1] = 0;
+    mHavePixelLayout = false;
+    memset(&mPixelLayout, 0, sizeof(mPixelLayout));
+    mHaveColorPrimaries = false;
+    mColorPrimaries = g_Null_UL;
+    mHaveTransferCharacteristic = false;
+    mTransferCharacteristic = g_Null_UL;
+    mHaveCodingEquations = false;
+    mCodingEquations = g_Null_UL;
 }
 
 OpaqueMXFDescriptorHelper::~OpaqueMXFDescriptorHelper()
@@ -201,14 +261,101 @@ void OpaqueMXFDescriptorHelper::SetQuantizationBits(uint32_t bits)
     mQuantizationBits = bits;
 }
 
+void OpaqueMXFDescriptorHelper::SetDescriptorKind(int kind)
+{
+    mDescriptorKind = kind;
+}
+
+void OpaqueMXFDescriptorHelper::SetComponentDepth(uint32_t depth)
+{
+    mComponentDepth = depth;
+}
+
+void OpaqueMXFDescriptorHelper::SetHorizontalSubsampling(uint32_t value)
+{
+    mHorizSubsampling = value;
+}
+
+void OpaqueMXFDescriptorHelper::SetVerticalSubsampling(uint32_t value)
+{
+    mVertSubsampling = value;
+}
+
+void OpaqueMXFDescriptorHelper::SetFrameLayout(uint8_t layout)
+{
+    mFrameLayout = layout;
+}
+
+void OpaqueMXFDescriptorHelper::SetAspectRatio(mxfRational aspect_ratio)
+{
+    mHaveAspectRatio = true;
+    mAspectRatio = aspect_ratio;
+}
+
+void OpaqueMXFDescriptorHelper::SetVideoLineMap(int32_t first, int32_t second)
+{
+    mHaveVideoLineMap = true;
+    mVideoLineMap[0] = first;
+    mVideoLineMap[1] = second;
+}
+
+void OpaqueMXFDescriptorHelper::SetPixelLayout(const uint8_t *components, uint8_t count)
+{
+    mHavePixelLayout = true;
+    memset(&mPixelLayout, 0, sizeof(mPixelLayout));
+    if (!components)
+        return;
+    uint8_t n = count > 8 ? 8 : count;
+    for (uint8_t i = 0; i < n; i++) {
+        mPixelLayout.components[i].code = components[i * 2];
+        mPixelLayout.components[i].depth = components[i * 2 + 1];
+    }
+}
+
+void OpaqueMXFDescriptorHelper::SetColorPrimaries(mxfUL label)
+{
+    mHaveColorPrimaries = true;
+    mColorPrimaries = label;
+}
+
+void OpaqueMXFDescriptorHelper::SetTransferCharacteristic(mxfUL label)
+{
+    mHaveTransferCharacteristic = true;
+    mTransferCharacteristic = label;
+}
+
+void OpaqueMXFDescriptorHelper::SetCodingEquations(mxfUL label)
+{
+    mHaveCodingEquations = true;
+    mCodingEquations = label;
+}
+
+int OpaqueMXFDescriptorHelper::ResolvedDescriptorKind() const
+{
+    if (mDescriptorKind != OPAQUE_DESC_DEFAULT)
+        return mDescriptorKind;
+    if (mEssenceType == OPAQUE_SOUND)
+        return OPAQUE_DESC_WAVE;
+    if (mEssenceType == OPAQUE_DATA)
+        return OPAQUE_DESC_DATA;
+    return OPAQUE_DESC_CDCI;
+}
+
 FileDescriptor* OpaqueMXFDescriptorHelper::CreateFileDescriptor(HeaderMetadata *header_metadata)
 {
-    if (mEssenceType == OPAQUE_SOUND) {
-        mFileDescriptor = new WaveAudioDescriptor(header_metadata);
-    } else if (mEssenceType == OPAQUE_DATA) {
-        mFileDescriptor = new GenericDataEssenceDescriptor(header_metadata);
-    } else {
-        mFileDescriptor = new CDCIEssenceDescriptor(header_metadata);
+    switch (ResolvedDescriptorKind()) {
+        case OPAQUE_DESC_WAVE:
+            mFileDescriptor = new WaveAudioDescriptor(header_metadata);
+            break;
+        case OPAQUE_DESC_DATA:
+            mFileDescriptor = new GenericDataEssenceDescriptor(header_metadata);
+            break;
+        case OPAQUE_DESC_RGBA:
+            mFileDescriptor = new RGBAEssenceDescriptor(header_metadata);
+            break;
+        default:
+            mFileDescriptor = new CDCIEssenceDescriptor(header_metadata);
+            break;
     }
     UpdateFileDescriptor();
     return mFileDescriptor;
@@ -218,7 +365,7 @@ void OpaqueMXFDescriptorHelper::UpdateFileDescriptor()
 {
     MXFDescriptorHelper::UpdateFileDescriptor();
 
-    if (mEssenceType == OPAQUE_SOUND) {
+    if (ResolvedDescriptorKind() == OPAQUE_DESC_WAVE) {
         WaveAudioDescriptor *wav = dynamic_cast<WaveAudioDescriptor*>(mFileDescriptor);
         BMX_ASSERT(wav);
         uint32_t bytes_per_sample = mChannelCount * ((mQuantizationBits + 7) / 8);
@@ -233,7 +380,7 @@ void OpaqueMXFDescriptorHelper::UpdateFileDescriptor()
         return;
     }
 
-    if (mEssenceType == OPAQUE_DATA) {
+    if (ResolvedDescriptorKind() == OPAQUE_DESC_DATA) {
         GenericDataEssenceDescriptor *data = dynamic_cast<GenericDataEssenceDescriptor*>(mFileDescriptor);
         BMX_ASSERT(data);
         if (!mxf_equals_ul(&mCodingUL, &g_Null_UL))
@@ -241,20 +388,42 @@ void OpaqueMXFDescriptorHelper::UpdateFileDescriptor()
         return;
     }
 
-    CDCIEssenceDescriptor *cdci = dynamic_cast<CDCIEssenceDescriptor*>(mFileDescriptor);
-    BMX_ASSERT(cdci);
-    cdci->setStoredWidth(mStoredWidth);
-    cdci->setStoredHeight(mStoredHeight);
-    cdci->setSampledWidth(mStoredWidth);
-    cdci->setSampledHeight(mStoredHeight);
-    cdci->setDisplayWidth(mStoredWidth);
-    cdci->setDisplayHeight(mStoredHeight);
-    cdci->setComponentDepth(8);
-    cdci->setHorizontalSubsampling(2);
-    cdci->setVerticalSubsampling(1);
-    cdci->setFrameLayout(MXF_FULL_FRAME);
+    GenericPictureEssenceDescriptor *pict = dynamic_cast<GenericPictureEssenceDescriptor*>(mFileDescriptor);
+    BMX_ASSERT(pict);
+    pict->setStoredWidth(mStoredWidth);
+    pict->setStoredHeight(mStoredHeight);
+    pict->setSampledWidth(mStoredWidth);
+    pict->setSampledHeight(mStoredHeight);
+    pict->setSampledXOffset(0);
+    pict->setSampledYOffset(0);
+    pict->setDisplayWidth(mStoredWidth);
+    pict->setDisplayHeight(mStoredHeight);
+    pict->setDisplayXOffset(0);
+    pict->setDisplayYOffset(0);
+    pict->setFrameLayout(mFrameLayout);
     if (!mxf_equals_ul(&mCodingUL, &g_Null_UL))
-        cdci->setPictureEssenceCoding(mCodingUL);
+        pict->setPictureEssenceCoding(mCodingUL);
+    if (mHaveAspectRatio)
+        pict->setAspectRatio(mAspectRatio);
+    if (mHaveVideoLineMap)
+        pict->setVideoLineMap(mVideoLineMap[0], mVideoLineMap[1]);
+    if (mHaveColorPrimaries)
+        pict->setColorPrimaries(mColorPrimaries);
+    if (mHaveTransferCharacteristic)
+        pict->setCaptureGamma(mTransferCharacteristic);
+    if (mHaveCodingEquations)
+        pict->setCodingEquations(mCodingEquations);
+
+    CDCIEssenceDescriptor *cdci = dynamic_cast<CDCIEssenceDescriptor*>(mFileDescriptor);
+    if (cdci) {
+        cdci->setComponentDepth(mComponentDepth);
+        cdci->setHorizontalSubsampling(mHorizSubsampling);
+        cdci->setVerticalSubsampling(mVertSubsampling);
+    }
+
+    RGBAEssenceDescriptor *rgba = dynamic_cast<RGBAEssenceDescriptor*>(mFileDescriptor);
+    if (rgba && mHavePixelLayout)
+        rgba->setPixelLayout(mPixelLayout);
 }
 
 uint32_t OpaqueMXFDescriptorHelper::GetSampleSize()
@@ -293,13 +462,22 @@ public:
                     mxfRational frame_rate, EssenceType essence_type);
     virtual ~OP1AOpaqueTrack();
 
+    void SetElementType(uint8_t element_type);
+    void SetElementLLen(uint8_t llen);
+    void SetTemporalReordering(bool enable);
+
 protected:
     virtual void PrepareWrite(uint8_t track_count);
     virtual void WriteSamplesInt(const unsigned char *data, uint32_t size, uint32_t num_samples);
 
 private:
+    void ApplyElementKey();
+
     OpaqueMXFDescriptorHelper *mOpaqueDescriptorHelper;
     int64_t mPosition;
+    uint8_t mElementType;
+    uint8_t mElementLLen;
+    bool mTemporalReordering;
 };
 
 
@@ -330,34 +508,51 @@ using namespace mxfpp;
 
 
 
-static const mxfKey PICTURE_ELEMENT_KEY = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x15, 0x01, 0x7F, 0x00);
-static const mxfKey SOUND_ELEMENT_KEY   = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x16, 0x01, 0x7F, 0x00);
-static const mxfKey DATA_ELEMENT_KEY    = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x17, 0x01, 0x7F, 0x00);
-
-
-
 OP1AOpaqueTrack::OP1AOpaqueTrack(OP1AFile *file, uint32_t track_index, uint32_t track_id, uint8_t track_type_number,
                                  mxfRational frame_rate, EssenceType essence_type)
 : OP1ATrack(file, track_index, track_id, track_type_number, frame_rate, essence_type)
 {
     mOpaqueDescriptorHelper = dynamic_cast<OpaqueMXFDescriptorHelper*>(mDescriptorHelper);
     BMX_ASSERT(mOpaqueDescriptorHelper);
-
-    if (essence_type == OPAQUE_SOUND) {
-        mTrackNumber = MXF_TRACK_NUM(0x16, 0x01, 0x7F, 0x00);
-        mEssenceElementKey = SOUND_ELEMENT_KEY;
-    } else if (essence_type == OPAQUE_DATA) {
-        mTrackNumber = MXF_TRACK_NUM(0x17, 0x01, 0x7F, 0x00);
-        mEssenceElementKey = DATA_ELEMENT_KEY;
-    } else {
-        mTrackNumber = MXF_TRACK_NUM(0x15, 0x01, 0x7F, 0x00);
-        mEssenceElementKey = PICTURE_ELEMENT_KEY;
-    }
     mPosition = 0;
+    mElementType = 0x7F;
+    mElementLLen = 4;
+    mTemporalReordering = false;
+    ApplyElementKey();
 }
 
 OP1AOpaqueTrack::~OP1AOpaqueTrack()
 {
+}
+
+void OP1AOpaqueTrack::SetElementType(uint8_t element_type)
+{
+    mElementType = element_type;
+    ApplyElementKey();
+}
+
+void OP1AOpaqueTrack::SetElementLLen(uint8_t llen)
+{
+    mElementLLen = llen ? llen : 4;
+}
+
+void OP1AOpaqueTrack::SetTemporalReordering(bool enable)
+{
+    mTemporalReordering = enable;
+}
+
+void OP1AOpaqueTrack::ApplyElementKey()
+{
+    if (mEssenceType == OPAQUE_SOUND) {
+        mTrackNumber = MXF_TRACK_NUM(0x16, 0x01, mElementType, 0x00);
+        mEssenceElementKey = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x16, 0x01, mElementType, 0x00);
+    } else if (mEssenceType == OPAQUE_DATA) {
+        mTrackNumber = MXF_TRACK_NUM(0x17, 0x01, mElementType, 0x00);
+        mEssenceElementKey = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x17, 0x01, mElementType, 0x00);
+    } else {
+        mTrackNumber = MXF_TRACK_NUM(0x15, 0x01, mElementType, 0x00);
+        mEssenceElementKey = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x15, 0x01, mElementType, 0x00);
+    }
 }
 
 void OP1AOpaqueTrack::PrepareWrite(uint8_t track_count)
@@ -365,14 +560,14 @@ void OP1AOpaqueTrack::PrepareWrite(uint8_t track_count)
     CompleteEssenceKeyAndTrackNum(track_count);
 
     if (mEssenceType == OPAQUE_SOUND) {
-        mCPManager->RegisterSoundTrackElement(mTrackIndex, mEssenceElementKey, 4);
+        mCPManager->RegisterSoundTrackElement(mTrackIndex, mEssenceElementKey, mElementLLen);
         mIndexTable->RegisterSoundTrackElement(mTrackIndex);
     } else if (mEssenceType == OPAQUE_DATA) {
         mCPManager->RegisterDataTrackElement(mTrackIndex, mEssenceElementKey, 0, 0);
         mIndexTable->RegisterDataTrackElement(mTrackIndex, false);
     } else {
-        mCPManager->RegisterPictureTrackElement(mTrackIndex, mEssenceElementKey, false);
-        mIndexTable->RegisterPictureTrackElement(mTrackIndex, false, false);
+        mCPManager->RegisterPictureTrackElement(mTrackIndex, mEssenceElementKey, false, mElementLLen);
+        mIndexTable->RegisterPictureTrackElement(mTrackIndex, false, mTemporalReordering);
     }
 }
 
