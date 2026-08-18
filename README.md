@@ -4,7 +4,7 @@ Rust-first MXF container primitives with Python and Node.js bindings, built on
 a statically linked [bmx](https://github.com/ebu/bmx) core.
 
 Essence goes in and essence comes out. A frame is the KLV payload with the key
-and length stripped. The core is synchronous: one reader per thread.
+and length stripped. The core is synchronous: one reader or writer per thread.
 
 ```bash
 cargo add mxfuse
@@ -46,6 +46,25 @@ with open("input.mxf", "rb") as f:
 A custom byte source is any object that implements `read`, `seek`, `tell`, and
 optionally `size`. Regular files infer size via `seek(0, 2)`.
 
+```python
+from mxfuse import ClipSpec, EssenceType, Flavour, TrackSpec, write_mxf
+
+spec = ClipSpec(
+    edit_rate=(25, 1),
+    flavour=Flavour.DEFAULT,
+    duration=len(images),
+    tracks=[
+        TrackSpec(EssenceType.UNC_HD_1080P),
+        TrackSpec(EssenceType.WAVE_PCM, sampling_rate=48000),
+    ],
+)
+
+with open("output.mxf", "wb") as f, write_mxf(f, spec) as clip:
+    for image, audio in zip(images, audios):
+        clip.write(0, image)
+        clip.write(1, audio)
+```
+
 ### Node
 
 ```typescript
@@ -67,6 +86,25 @@ await clip.close();
 
 Do not share one reader across concurrent tasks.
 
+```typescript
+import { EssenceType, Flavour, writeMxf } from "mxfuse";
+
+const writer = await writeMxf("output.mxf", {
+  editRate: [25, 1],
+  flavour: Flavour.DEFAULT,
+  duration: images.length,
+  tracks: [
+    { essenceType: EssenceType.UNC_HD_1080P },
+    { essenceType: EssenceType.WAVE_PCM, samplingRate: 48000 },
+  ],
+});
+for (const [image, audio] of zip(images, audios)) {
+  await writer.write(0, image);
+  await writer.write(1, audio);
+}
+await writer.finish();
+```
+
 ### Rust
 
 ```rust
@@ -87,6 +125,30 @@ for package in clip.read(1)? {
         let _ = (frame.data, frame.element_key, frame.file_position);
     }
 }
+```
+
+```rust
+use mxfuse::{write_mxf, ClipSpec, EssenceType, Flavour, Rational, TrackSpec};
+
+let file = std::fs::File::create("output.mxf")?;
+let spec = ClipSpec {
+    edit_rate: Rational { num: 25, den: 1 },
+    flavour: Flavour::DEFAULT,
+    duration: Some(images.len() as i64),
+    tracks: vec![
+        TrackSpec::new(EssenceType::UNC_HD_1080P),
+        TrackSpec {
+            sampling_rate: Some(48000),
+            ..TrackSpec::new(EssenceType::WAVE_PCM)
+        },
+    ],
+};
+let mut writer = write_mxf(file, spec)?;
+for (image, audio) in images.iter().zip(audios.iter()) {
+    writer.write(0, image)?;
+    writer.write(1, audio)?;
+}
+writer.finish()?;
 ```
 
 `file_position` for frame-wrapped essence points at the KLV, with `kl_size`
@@ -112,6 +174,7 @@ src/
 ├── python-mxfuse/   # PyO3 extension and Python API
 └── node-mxfuse/     # napi-rs extension and TypeScript API
 vendor/bmx/          # ebu/bmx v1.7 source release (offline)
+patches/             # applied to an OUT_DIR copy of vendor/bmx at build time
 ```
 
 ### Commands

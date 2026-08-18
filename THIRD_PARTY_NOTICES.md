@@ -34,6 +34,9 @@ POSSIBILITY OF SUCH DAMAGE.
 ```
 
 Source: [ebu/bmx](https://github.com/ebu/bmx) v1.7, vendored under `vendor/bmx`.
+The linked library is modified at build time by the tracked diffs in `patches/`
+(opaque picture/sound/data essence type). `vendor/bmx` itself remains the
+pristine v1.7 tree.
 
 ## Expat
 
