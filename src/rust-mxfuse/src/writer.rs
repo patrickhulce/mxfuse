@@ -1,18 +1,29 @@
+use std::ffi::CString;
 use std::io::SeekFrom;
 use std::os::raw::{c_int, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use mxfuse_sys::{
-    mxfuse_writer_complete, mxfuse_writer_create_track, mxfuse_writer_free, mxfuse_writer_open,
-    mxfuse_writer_prepare, mxfuse_writer_write_samples, MxfuseByteSourceVtable, MxfuseError,
-    MxfuseRational, MxfuseTrackSpec, MxfuseWriter, MXFUSE_OK, MXFUSE_TRACK_HAS_CHANNEL_COUNT,
-    MXFUSE_TRACK_HAS_CODING_UL, MXFUSE_TRACK_HAS_CONTAINER_UL, MXFUSE_TRACK_HAS_QUANT_BITS,
-    MXFUSE_TRACK_HAS_SAMPLING_RATE, MXFUSE_TRACK_HAS_STORED_HEIGHT, MXFUSE_TRACK_HAS_STORED_WIDTH,
+    mxfuse_writer_add_xml, mxfuse_writer_complete, mxfuse_writer_configure,
+    mxfuse_writer_create_track, mxfuse_writer_free, mxfuse_writer_open, mxfuse_writer_prepare,
+    mxfuse_writer_write_samples, MxfuseByteSourceVtable, MxfuseClipOptions, MxfuseError,
+    MxfuseRational, MxfuseTrackSpec, MxfuseWriter, MXFUSE_CLIP_HAS_COMPANY,
+    MXFUSE_CLIP_HAS_CREATION_DATE, MXFUSE_CLIP_HAS_FILE_SOURCE_UID, MXFUSE_CLIP_HAS_GENERATION_UID,
+    MXFUSE_CLIP_HAS_MATERIAL_UID, MXFUSE_CLIP_HAS_PRODUCT, MXFUSE_CLIP_HAS_PRODUCT_UID,
+    MXFUSE_CLIP_HAS_PRODUCT_VERSION, MXFUSE_CLIP_HAS_START_TIMECODE, MXFUSE_CLIP_HAS_SYSTEM_ITEM,
+    MXFUSE_CLIP_HAS_TIMECODE_TRACK, MXFUSE_CLIP_HAS_VERSION_STRING, MXFUSE_NAME_LEN, MXFUSE_OK,
+    MXFUSE_TRACK_HAS_ASPECT_RATIO, MXFUSE_TRACK_HAS_CHANNEL_COUNT, MXFUSE_TRACK_HAS_CODING_EQ,
+    MXFUSE_TRACK_HAS_CODING_UL, MXFUSE_TRACK_HAS_COLOR_PRIMARIES, MXFUSE_TRACK_HAS_COMPONENT_DEPTH,
+    MXFUSE_TRACK_HAS_CONTAINER_UL, MXFUSE_TRACK_HAS_DESCRIPTOR, MXFUSE_TRACK_HAS_ELEMENT_LLEN,
+    MXFUSE_TRACK_HAS_ELEMENT_TYPE, MXFUSE_TRACK_HAS_FRAME_LAYOUT, MXFUSE_TRACK_HAS_PIXEL_LAYOUT,
+    MXFUSE_TRACK_HAS_QUANT_BITS, MXFUSE_TRACK_HAS_SAMPLING_RATE, MXFUSE_TRACK_HAS_STORED_HEIGHT,
+    MXFUSE_TRACK_HAS_STORED_WIDTH, MXFUSE_TRACK_HAS_SUBSAMPLING, MXFUSE_TRACK_HAS_TEMPORAL_REORDER,
+    MXFUSE_TRACK_HAS_TRANSFER, MXFUSE_TRACK_HAS_VIDEO_LINE_MAP, MXFUSE_VERSION_LEN,
 };
 
 use crate::error::{Error, Result};
 use crate::source::ByteSink;
-use crate::types::{ClipSpec, EssenceType, TrackSpec};
+use crate::types::{ClipSpec, EssenceType, Identity, TrackSpec, XmlMetadata};
 
 struct SinkBox {
     sink: Box<dyn ByteSink>,
@@ -226,6 +237,11 @@ pub fn write_mxf<S: ByteSink + 'static>(sink: S, spec: ClipSpec) -> Result<ClipW
         return Err(Error::from_shim(&err));
     }
 
+    if let Err(error) = configure_writer(raw, &spec) {
+        unsafe { mxfuse_writer_free(raw) };
+        return Err(error);
+    }
+
     let mut tracks = Vec::with_capacity(spec.tracks.len());
     for track in &spec.tracks {
         let mut out_index = 0u32;
@@ -243,6 +259,13 @@ pub fn write_mxf<S: ByteSink + 'static>(sink: S, spec: ClipSpec) -> Result<ClipW
         });
     }
 
+    for item in &spec.xml {
+        if let Err(error) = add_xml(raw, item) {
+            unsafe { mxfuse_writer_free(raw) };
+            return Err(error);
+        }
+    }
+
     let mut err = MxfuseError::default();
     if unsafe { mxfuse_writer_prepare(raw, &mut err) } != MXFUSE_OK {
         unsafe { mxfuse_writer_free(raw) };
@@ -250,6 +273,138 @@ pub fn write_mxf<S: ByteSink + 'static>(sink: S, spec: ClipSpec) -> Result<ClipW
     }
 
     Ok(ClipWriter { raw, tracks })
+}
+
+fn add_xml(raw: *mut MxfuseWriter, item: &XmlMetadata) -> Result<()> {
+    if item.data.is_empty() {
+        return Err(Error::new("xml payload must not be empty"));
+    }
+    let size = u32::try_from(item.data.len()).map_err(|_| Error::new("xml payload exceeds u32"))?;
+    let language = match item.language.as_deref() {
+        Some(value) => {
+            Some(CString::new(value).map_err(|_| Error::new("xml language contains NUL"))?)
+        }
+        None => None,
+    };
+    let namespace = match item.namespace.as_deref() {
+        Some(value) => {
+            Some(CString::new(value).map_err(|_| Error::new("xml namespace contains NUL"))?)
+        }
+        None => None,
+    };
+    let mut err = MxfuseError::default();
+    let status = unsafe {
+        mxfuse_writer_add_xml(
+            raw,
+            item.data.as_ptr(),
+            size,
+            item.scheme_id
+                .as_ref()
+                .map_or(std::ptr::null(), |ul| ul.as_ptr()),
+            language
+                .as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
+            namespace
+                .as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
+            &mut err,
+        )
+    };
+    if status != MXFUSE_OK {
+        return Err(Error::from_shim(&err));
+    }
+    Ok(())
+}
+
+fn configure_writer(raw: *mut MxfuseWriter, spec: &ClipSpec) -> Result<()> {
+    let mut options = MxfuseClipOptions::default();
+    if let Some(timecode) = spec.start_timecode {
+        options.flags |= MXFUSE_CLIP_HAS_START_TIMECODE;
+        options.start_timecode.hour = timecode.hour;
+        options.start_timecode.minute = timecode.minute;
+        options.start_timecode.second = timecode.second;
+        options.start_timecode.frame = timecode.frame;
+        options.start_timecode.drop_frame = i32::from(timecode.drop_frame);
+    }
+    options.flags |= MXFUSE_CLIP_HAS_TIMECODE_TRACK;
+    options.timecode_track = i32::from(spec.timecode_track);
+    if spec.system_item {
+        options.flags |= MXFUSE_CLIP_HAS_SYSTEM_ITEM;
+        options.system_item = 1;
+    }
+    if let Some(identity) = &spec.identity {
+        apply_identity(&mut options, identity)?;
+    }
+    if options.flags == 0 {
+        return Ok(());
+    }
+    let mut err = MxfuseError::default();
+    if unsafe { mxfuse_writer_configure(raw, &options, &mut err) } != MXFUSE_OK {
+        return Err(Error::from_shim(&err));
+    }
+    Ok(())
+}
+
+fn apply_identity(options: &mut MxfuseClipOptions, identity: &Identity) -> Result<()> {
+    if let Some(name) = &identity.company_name {
+        options.flags |= MXFUSE_CLIP_HAS_COMPANY;
+        copy_c_array(&mut options.company_name, name, "company_name")?;
+    }
+    if let Some(name) = &identity.product_name {
+        options.flags |= MXFUSE_CLIP_HAS_PRODUCT;
+        copy_c_array(&mut options.product_name, name, "product_name")?;
+    }
+    if let Some(version) = &identity.version_string {
+        options.flags |= MXFUSE_CLIP_HAS_VERSION_STRING;
+        copy_c_array(&mut options.version_string, version, "version_string")?;
+    }
+    if let Some(version) = identity.product_version {
+        options.flags |= MXFUSE_CLIP_HAS_PRODUCT_VERSION;
+        options.product_version = [version.0, version.1, version.2, version.3, version.4];
+    }
+    if let Some(uid) = identity.product_uid {
+        options.flags |= MXFUSE_CLIP_HAS_PRODUCT_UID;
+        options.product_uid = uid;
+    }
+    if let Some(date) = identity.creation_date {
+        options.flags |= MXFUSE_CLIP_HAS_CREATION_DATE;
+        options.creation_year = date.0;
+        options.creation_month = date.1;
+        options.creation_day = date.2;
+        options.creation_hour = date.3;
+        options.creation_min = date.4;
+        options.creation_sec = date.5;
+        options.creation_qmsec = date.6;
+    }
+    if let Some(uid) = identity.generation_uid {
+        options.flags |= MXFUSE_CLIP_HAS_GENERATION_UID;
+        options.generation_uid = uid;
+    }
+    if let Some(uid) = identity.material_package_uid {
+        options.flags |= MXFUSE_CLIP_HAS_MATERIAL_UID;
+        options.material_package_uid = uid;
+    }
+    if let Some(uid) = identity.file_source_package_uid {
+        options.flags |= MXFUSE_CLIP_HAS_FILE_SOURCE_UID;
+        options.file_source_package_uid = uid;
+    }
+    let _ = (MXFUSE_NAME_LEN, MXFUSE_VERSION_LEN);
+    Ok(())
+}
+
+fn copy_c_array(dest: &mut [std::os::raw::c_char], value: &str, name: &str) -> Result<()> {
+    let bytes = value.as_bytes();
+    if bytes.len() >= dest.len() {
+        return Err(Error::new(format!(
+            "{name} exceeds {} bytes",
+            dest.len() - 1
+        )));
+    }
+    for (index, byte) in bytes.iter().enumerate() {
+        dest[index] = *byte as std::os::raw::c_char;
+    }
+    dest[bytes.len()] = 0;
+    Ok(())
 }
 
 fn pcm_bytes_per_sample(track: &TrackSpec) -> u32 {
@@ -293,9 +448,69 @@ fn track_spec_to_c(track: &TrackSpec) -> MxfuseTrackSpec {
         spec.flags |= MXFUSE_TRACK_HAS_CONTAINER_UL;
         spec.essence_container_ul = ul;
     }
-    if let Some(ul) = track.picture_coding_ul {
+    if let Some(ul) = track.coding_ul {
         spec.flags |= MXFUSE_TRACK_HAS_CODING_UL;
         spec.picture_coding_ul = ul;
+    }
+    if let Some(element_type) = track.element_type {
+        spec.flags |= MXFUSE_TRACK_HAS_ELEMENT_TYPE;
+        spec.element_type = element_type;
+    }
+    if let Some(llen) = track.element_llen {
+        spec.flags |= MXFUSE_TRACK_HAS_ELEMENT_LLEN;
+        spec.element_llen = llen;
+    }
+    if track.temporal_reordering {
+        spec.flags |= MXFUSE_TRACK_HAS_TEMPORAL_REORDER;
+        spec.temporal_reordering = 1;
+    }
+    if let Some(kind) = track.descriptor {
+        spec.flags |= MXFUSE_TRACK_HAS_DESCRIPTOR;
+        spec.descriptor_kind = kind.as_i32();
+    }
+    if let Some(depth) = track.component_depth {
+        spec.flags |= MXFUSE_TRACK_HAS_COMPONENT_DEPTH;
+        spec.component_depth = depth;
+    }
+    if let Some((horiz, vert)) = track.subsampling {
+        spec.flags |= MXFUSE_TRACK_HAS_SUBSAMPLING;
+        spec.horiz_subsampling = horiz;
+        spec.vert_subsampling = vert;
+    }
+    if let Some(layout) = track.frame_layout {
+        spec.flags |= MXFUSE_TRACK_HAS_FRAME_LAYOUT;
+        spec.frame_layout = layout;
+    }
+    if let Some(ratio) = track.aspect_ratio {
+        spec.flags |= MXFUSE_TRACK_HAS_ASPECT_RATIO;
+        spec.aspect_ratio = MxfuseRational {
+            num: ratio.num,
+            den: ratio.den,
+        };
+    }
+    if let Some((first, second)) = track.video_line_map {
+        spec.flags |= MXFUSE_TRACK_HAS_VIDEO_LINE_MAP;
+        spec.video_line_map = [first, second];
+    }
+    if let Some(layout) = &track.pixel_layout {
+        spec.flags |= MXFUSE_TRACK_HAS_PIXEL_LAYOUT;
+        spec.pixel_layout_count = u8::try_from(layout.len().min(8)).unwrap_or(8);
+        for (index, component) in layout.iter().take(8).enumerate() {
+            spec.pixel_layout[index * 2] = component.code;
+            spec.pixel_layout[index * 2 + 1] = component.depth;
+        }
+    }
+    if let Some(ul) = track.color_primaries {
+        spec.flags |= MXFUSE_TRACK_HAS_COLOR_PRIMARIES;
+        spec.color_primaries = ul;
+    }
+    if let Some(ul) = track.transfer_characteristic {
+        spec.flags |= MXFUSE_TRACK_HAS_TRANSFER;
+        spec.transfer_characteristic = ul;
+    }
+    if let Some(ul) = track.coding_equations {
+        spec.flags |= MXFUSE_TRACK_HAS_CODING_EQ;
+        spec.coding_equations = ul;
     }
     spec
 }
