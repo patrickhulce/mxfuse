@@ -1,9 +1,20 @@
 use std::io::{self, Cursor, SeekFrom};
+use std::sync::Mutex;
 
 use mxfuse::{
     open_mxf, write_mxf, ByteSink, ClipSpec, DescriptorKind, EssenceType, Flavour, Identity,
     PixelComponent, Rational, ReadOptions, Timecode, TrackKind, TrackSpec, XmlMetadata,
 };
+
+// libMXF++ keeps UTF-16 conversion state in process-global storage, so two
+// writers in one test binary cannot run at the same time.
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+fn exclusive_write() -> std::sync::MutexGuard<'static, ()> {
+    WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 struct NonSeekableSink {
     inner: Cursor<Vec<u8>>,
@@ -59,6 +70,7 @@ fn stock_spec(duration: i64, flavour: Flavour) -> ClipSpec {
 
 #[test]
 fn write_round_trip_reads_payloads() {
+    let _guard = exclusive_write();
     let picture_a = unc_frame(0x11);
     let picture_b = unc_frame(0x22);
     let audio_a = pcm_edit_unit(0x33);
@@ -109,6 +121,7 @@ fn write_round_trip_reads_payloads() {
 
 #[test]
 fn opaque_round_trip_preserves_container_ul() {
+    let _guard = exclusive_write();
     let container = [
         0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x01, 0x0d, 0x01, 0x03, 0x01, 0x02, 0x7f, 0x01,
         0x01,
@@ -157,6 +170,7 @@ fn opaque_round_trip_preserves_container_ul() {
     let mut clip = open_mxf(Cursor::new(bytes), ReadOptions::default()).unwrap();
     assert_eq!(clip.tracks().len(), 1);
     assert_eq!(clip.tracks()[0].essence_container_ul, container);
+    assert_eq!(clip.tracks()[0].coding_ul, Some(coding));
     let tracks = clip.tracks().to_vec();
     clip.select(tracks.iter()).unwrap();
     clip.seek(0).unwrap();
@@ -168,7 +182,54 @@ fn opaque_round_trip_preserves_container_ul() {
 }
 
 #[test]
+fn opaque_data_coding_ul_round_trips() {
+    let _guard = exclusive_write();
+    let container = [
+        0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x0d, 0x0d, 0x01, 0x03, 0x01, 0x02, 0x70, 0x03,
+        0x00,
+    ];
+    let coding = [
+        0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x0d, 0x04, 0x01, 0x02, 0x02, 0x70, 0x00, 0x00,
+        0x00,
+    ];
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(Cursor::new(Vec::new())));
+    struct SharedSink(std::sync::Arc<std::sync::Mutex<Cursor<Vec<u8>>>>);
+    impl ByteSink for SharedSink {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            std::io::Write::write(&mut *self.0.lock().unwrap(), buf)
+        }
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            std::io::Seek::seek(&mut *self.0.lock().unwrap(), pos)
+        }
+        fn tell(&mut self) -> io::Result<u64> {
+            Ok(self.0.lock().unwrap().position())
+        }
+    }
+
+    let spec = ClipSpec {
+        tracks: vec![TrackSpec {
+            essence_container_ul: Some(container),
+            coding_ul: Some(coding),
+            descriptor: Some(DescriptorKind::GenericData),
+            ..TrackSpec::new(EssenceType::OPAQUE_DATA)
+        }],
+        duration: Some(1),
+        ..stock_spec(1, Flavour::DEFAULT)
+    };
+    let mut writer = write_mxf(SharedSink(shared.clone()), spec).unwrap();
+    writer.write(0, b"meta").unwrap();
+    writer.finish().unwrap();
+
+    let bytes = shared.lock().unwrap().get_ref().clone();
+    let clip = open_mxf(Cursor::new(bytes), ReadOptions::default()).unwrap();
+    assert_eq!(clip.tracks()[0].essence_container_ul, container);
+    assert_eq!(clip.tracks()[0].coding_ul, Some(coding));
+    assert_eq!(clip.tracks()[0].descriptor, DescriptorKind::GenericData);
+}
+
+#[test]
 fn single_pass_writes_to_non_seekable_sink() {
+    let _guard = exclusive_write();
     let picture = unc_frame(0xaa);
     let audio = pcm_edit_unit(0x55);
     let shared = std::sync::Arc::new(std::sync::Mutex::new(Cursor::new(Vec::new())));
@@ -204,6 +265,7 @@ fn single_pass_writes_to_non_seekable_sink() {
 
 #[test]
 fn single_pass_duration_mismatch_fails() {
+    let _guard = exclusive_write();
     let picture = unc_frame(0xaa);
     let audio = pcm_edit_unit(0x55);
     let mut writer = write_mxf(
@@ -220,6 +282,7 @@ fn single_pass_duration_mismatch_fails() {
 
 #[test]
 fn xml_round_trip_preserves_payload() {
+    let _guard = exclusive_write();
     let xml = b"<clip xmlns=\"urn:x-mxfuse:test\">hello</clip>".to_vec();
     let frame_a = b"opaque-frame-a".to_vec();
     let frame_b = b"opaque-frame-b".to_vec();
@@ -302,6 +365,7 @@ const JXL_PICTURE_KEY: [u8; 16] = [
 
 #[test]
 fn jxl_mapping_writes_rgba_descriptor_and_element_key() {
+    let _guard = exclusive_write();
     let shared = std::sync::Arc::new(std::sync::Mutex::new(Cursor::new(Vec::new())));
     struct SharedSink(std::sync::Arc<std::sync::Mutex<Cursor<Vec<u8>>>>);
     impl ByteSink for SharedSink {
@@ -415,6 +479,7 @@ fn jxl_mapping_writes_rgba_descriptor_and_element_key() {
 
 #[test]
 fn start_timecode_and_identity_round_trip() {
+    let _guard = exclusive_write();
     let spec = ClipSpec {
         start_timecode: Some(Timecode {
             hour: 1,
