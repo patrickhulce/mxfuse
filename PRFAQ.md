@@ -4,12 +4,16 @@ Today we're proud to release `mxfuse`, a rust-python-node library that enables e
 
 With `mxfuse`, you can extract a single frame of a remote 500 GB IMF by reading only a few MB. 
 With `mxfuse`, you can wrap a clip in your company's proprietary image codec. 
+With `mxfuse`, you can reproduce any Generic Container mapping exactly — element key, BER length, descriptor class, and every descriptor field. 
+With `mxfuse`, you can read that mapping back: the picture coding UL and the full descriptor survive a round trip. 
+With `mxfuse`, you can pin product info, creation date, generation UID, and package UMIDs so Identification and package identity stay under your control. 
 With `mxfuse`, you can stream a well-formed OP1a file to ffplay in a single pass.
 
 
 ## Limitations
 
-- **OP1a, frame-wrapped only** for v1. No AS-02, RDD 9, D-10, Avid OP-Atom, or clip wrapping as a write target.
+- **OP1a, frame-wrapped only** for v1. No AS-02, IMF flavour, RDD 9, D-10, Avid OP-Atom, or clip wrapping as a write target.
+- **No sub-descriptors.** A private mapping that needs a registered sub-descriptor set (JPEG 2000, JPEG XS, or a future `JXLPictureSubDescriptor`) cannot write or read those items yet.
 - **Essence in, essence out.** No image codec decode or encode. A "frame" is the KLV payload with the key and length stripped.
 - **Synchronous core.** One reader per thread. Sharing a single reader across threads requires external locking; bmx mutates position, frame buffers, and index caches on every `Read()`.
 - **Single-pass streamable write** (`Flavour.SINGLE_PASS`) requires a known duration, a constant-bytes-per-element codec, partition interval 0, and no timed text. JPEG 2000 and ProRes are typically variable-frame-size and will not produce a closed-complete header in one pass.
@@ -55,7 +59,7 @@ with open("input.mxf", "rb") as f:
                 frame.file_position   # for building an offset map
 ```
 
-A custom byte source — an S3 range-reader, an HTTP client, a memory buffer — is any object that implements `read`, `seek`, `tell`, and `size` (regular files may omit `size`; it is inferred via `seek(0, 2)`). `open_mxf` wraps it in libMXF's `MXFFile` vtable — eleven function pointers, of which `read`/`seek`/`tell`/`size` are the ones a source must implement — and hands it to `MXFFileReader::Open`. Tune `read_ahead` and `cache_bytes`: without them, index-driven access issues one tiny KLV-header read after another (a 20 MB probe issued 1020 reads to fetch 2.5 MB).
+A custom byte source — an S3 range-reader, an HTTP client, a memory buffer — is any object that implements `read`, `seek`, `tell`, and `size` (regular files may omit `size`; it is inferred via `seek(0, 2)`). `open_mxf` wraps it in libMXF's `MXFFile` vtable — eleven function pointers, of which `read`/`seek`/`tell`/`size` are the ones a source must implement — and hands it to `MXFFileReader::Open`. Tune `read_ahead` and `cache_bytes`: without them, index-driven access issues one tiny KLV-header read after another. `make bench` on a 61 MB synthetic OP1a (8,000 edit units, Apple M5 Max) sought the last picture frame in 41,007 reads totaling 127 KB; the same access with the default 1 MB read-ahead and 64 MB cache is 3 reads totaling 1.2 MB. A 1 MB window will also pull neighbouring interleaved sound bytes — set both knobs to 0 when you need payload-level track isolation.
 
 `frame.file_position` for frame-wrapped essence points at the KLV, with `kl_size` giving the header length. Clip-wrapped essence points at the sample data and `kl_size` is 0.
 
@@ -86,23 +90,44 @@ with open("output.mxf", "wb") as f, write_mxf(f, spec) as clip:
 
 #### Write a private codec
 
-Reading a proprietary essence type needs no patch: unrecognized picture/sound/data degrades to a generic type and the frame bytes come through unchanged. Writing one is the reason `mxfuse` vendors a patched bmx. The patch adds `EssenceType.OPAQUE_PICTURE` (and matching sound/data variants) so you supply the container UL and picture coding UL yourself:
+Reading a proprietary essence type needs no patch: unrecognized picture/sound/data degrades to a generic type and the frame bytes come through unchanged. Writing one is the reason `mxfuse` vendors a patched bmx. The patch adds `EssenceType.OPAQUE_PICTURE` (and matching sound/data variants) so you supply the container UL, coding UL, element key, BER length, descriptor class, and every descriptor field yourself:
 
 ```python
-from mxfuse import ClipSpec, TrackSpec, EssenceType, write_mxf
+from mxfuse import (
+    ClipSpec,
+    DescriptorKind,
+    EssenceType,
+    PixelComponent,
+    TrackSpec,
+    XmlMetadata,
+    write_mxf,
+)
 
 spec = ClipSpec(
     edit_rate=(24, 1),
     duration=len(images),
+    system_item=True,
     tracks=[
         TrackSpec(
             EssenceType.OPAQUE_PICTURE,
-            essence_container_ul=bytes.fromhex("060e2b34..."),
-            picture_coding_ul=bytes.fromhex("060e2b34..."),
+            essence_container_ul="060e2b340401010d0d01030102700100",
+            coding_ul="060e2b340401010d0401020270000000",
             stored_width=4096,
             stored_height=2160,
+            element_type=0x70,
+            element_llen=8,
+            temporal_reordering=True,
+            descriptor=DescriptorKind.RGBA,
+            aspect_ratio=(16, 9),
+            video_line_map=(1, 0),
+            pixel_layout=(
+                PixelComponent(code=ord("R"), depth=32),
+                PixelComponent(code=ord("G"), depth=32),
+                PixelComponent(code=ord("B"), depth=32),
+            ),
         ),
     ],
+    xml=[XmlMetadata(data=b"<clip xmlns='urn:example'>hello</clip>")],
 )
 
 with open("output.mxf", "wb") as f, write_mxf(f, spec) as clip:
@@ -110,7 +135,7 @@ with open("output.mxf", "wb") as f, write_mxf(f, spec) as clip:
         clip.write(0, image)
 ```
 
-You do not fork bmx. The opaque type lives in `mxfuse`'s tracked patch set; prebuilt artifacts already include it.
+You do not fork bmx. The opaque type lives in `mxfuse`'s tracked patch set; prebuilt artifacts already include it. On read, `track.coding_ul` and the picture descriptor identify the mapping — a JPEG XL clip is no longer indistinguishable from any other opaque picture.
 
 #### 1:1 bmx surface
 
@@ -176,4 +201,4 @@ No. Essence goes in and essence comes out. bmx has bitstream parsers, not image 
 
 ### What is the performance story for a 500 GB remote file?
 
-bmx is index-driven. Seeking to an edit unit and reading it touches the header, the index, and the essence KLV for the selected tracks — not the rest of the file. A local 20 MB probe seeking to frame 10 and reading 3 edit units fetched 2.5 MB across 1020 individual reads; the 1020 is the thing to amortize. Set `read_ahead` (so a short read pulls a window, the way bmx's own HTTP reader does) and `cache_bytes` (paged LRU via `mxf_cache_file_open`). Disable every track you do not need *before* `read`. With those two knobs, a single frame of a 500 GB IMF is a handful of range requests totaling a few MB.
+bmx is index-driven. Seeking to an edit unit and reading it touches the header, the index, and the essence KLV for the selected tracks — not the rest of the file. `make bench` (Apple M5 Max) on a 61 MB synthetic OP1a of 8,000 edit units sought the last picture frame in 41,007 reads totaling 127 KB with both knobs off, and in 3 reads totaling 1.2 MB (2% of the file) with the default 1 MB `read_ahead` and 64 MB `cache_bytes`. The same access on a 4×-smaller clip fetched 1.13× fewer bytes, so cost is not proportional to file size. The 41,007 tiny reads are what a remote source has to amortize. Disable unneeded tracks *before* `read`. A 1 MB read-ahead window will pull neighbouring interleaved sound bytes; deselected *payloads* are still never demanded, and the isolation proof runs with both knobs at 0. With those knobs, a single frame of a 500 GB IMF is a handful of range requests totaling a few MB.

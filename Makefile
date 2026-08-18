@@ -1,4 +1,4 @@
-.PHONY: all build lint typecheck test fixtures \
+.PHONY: all build lint typecheck test fixtures profile bench examples \
         build-rust build-python build-node \
         lint-rust lint-python lint-node \
         typecheck-python typecheck-node \
@@ -26,6 +26,8 @@ lint-rust:
 lint-python:
 	cd src/python-mxfuse && uv run ruff check .
 	cd src/python-mxfuse && uv run ruff format --check .
+	cd src/python-mxfuse && uv run ruff check ../../examples
+	cd src/python-mxfuse && uv run ruff format --check ../../examples
 
 lint-node:
 	pnpm --dir src/node-mxfuse lint
@@ -51,5 +53,14 @@ test-node: build-node
 
 fixtures: tests/fixtures/sample_op1a.mxf
 
+profile:
+	python3 scripts/mxf_structure.py
+
 tests/fixtures/sample_op1a.mxf:
 	./scripts/generate-fixture.sh
+
+bench:
+	cargo run -p mxfuse --release --example probe
+
+examples: build-python
+	uv run --project src/python-mxfuse --with imagecodecs python examples/jxl.py
