@@ -12,4 +12,5 @@ path = "src/lib.rs"
 [build-dependencies]
 cc = "1"
 cmake = "0.1"
+diffy = "0.4"
 dunce = "1"

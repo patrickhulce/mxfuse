@@ -1,0 +1,279 @@
+--- a/src/mxf_helper/MXFDescriptorHelper.cpp
++++ b/src/mxf_helper/MXFDescriptorHelper.cpp
+@@ -38,6 +38,7 @@
+ #include <bmx/mxf_helper/SoundMXFDescriptorHelper.h>
+ #include <bmx/mxf_helper/DataMXFDescriptorHelper.h>
+ #include <bmx/mxf_helper/TimedTextMXFDescriptorHelper.h>
++#include <bmx/mxf_helper/OpaqueMXFDescriptorHelper.h>
+ #include <bmx/Utils.h>
+ #include <bmx/BMXTypes.h>
+ #include <bmx/BMXException.h>
+@@ -79,6 +80,8 @@
+ 
+ MXFDescriptorHelper* MXFDescriptorHelper::Create(EssenceType essence_type)
+ {
++    if (OpaqueMXFDescriptorHelper::IsSupported(essence_type))
++        return OpaqueMXFDescriptorHelper::Create(essence_type);
+     if (PictureMXFDescriptorHelper::IsSupported(essence_type))
+         return PictureMXFDescriptorHelper::Create(essence_type);
+     else if (SoundMXFDescriptorHelper::IsSupported(essence_type))
+--- a/src/mxf_helper/CMakeLists.txt
++++ b/src/mxf_helper/CMakeLists.txt
+@@ -13,6 +13,7 @@
+     mxf_helper/MPEG2LGMXFDescriptorHelper.cpp
+     mxf_helper/MPEG2Validator.cpp
+     mxf_helper/MXFDescriptorHelper.cpp
++    mxf_helper/OpaqueMXFDescriptorHelper.cpp
+     mxf_helper/MXFFileFactory.cpp
+     mxf_helper/MXFMCALabelHelper.cpp
+     mxf_helper/PictureMXFDescriptorHelper.cpp
+--- a/include/bmx/mxf_helper/CMakeLists.txt
++++ b/include/bmx/mxf_helper/CMakeLists.txt
+@@ -14,6 +14,7 @@
+     bmx/mxf_helper/MPEG2LGMXFDescriptorHelper.h
+     bmx/mxf_helper/MPEG2Validator.h
+     bmx/mxf_helper/MXFDescriptorHelper.h
++    bmx/mxf_helper/OpaqueMXFDescriptorHelper.h
+     bmx/mxf_helper/MXFFileFactory.h
+     bmx/mxf_helper/MXFMCALabelHelper.h
+     bmx/mxf_helper/PictureMXFDescriptorHelper.h
+--- a/include/bmx/mxf_helper/OpaqueMXFDescriptorHelper.h
++++ b/include/bmx/mxf_helper/OpaqueMXFDescriptorHelper.h
+@@ -0,0 +1,65 @@
++/*
++ * Copyright (C) 2026, mxfuse contributors
++ * SPDX-License-Identifier: BSD-3-Clause
++ *
++ * Opaque essence helper: caller-supplied container and coding ULs.
++ */
++
++#ifndef BMX_OPAQUE_MXF_DESCRIPTOR_HELPER_H_
++#define BMX_OPAQUE_MXF_DESCRIPTOR_HELPER_H_
++
++
++#include <bmx/mxf_helper/MXFDescriptorHelper.h>
++
++
++
++namespace bmx
++{
++
++
++class OpaqueMXFDescriptorHelper : public MXFDescriptorHelper
++{
++public:
++    static bool IsSupported(EssenceType essence_type);
++    static MXFDescriptorHelper* Create(EssenceType essence_type);
++
++public:
++    OpaqueMXFDescriptorHelper();
++    virtual ~OpaqueMXFDescriptorHelper();
++
++    virtual bool IsPicture() const;
++    virtual bool IsSound() const;
++    virtual bool IsData() const;
++
++public:
++    void SetEssenceContainerUL(mxfUL essence_container_ul);
++    void SetPictureCodingUL(mxfUL picture_coding_ul);
++    void SetStoredWidth(uint32_t width);
++    void SetStoredHeight(uint32_t height);
++    void SetSamplingRate(mxfRational sampling_rate);
++    void SetChannelCount(uint32_t count);
++    void SetQuantizationBits(uint32_t bits);
++
++    virtual mxfpp::FileDescriptor* CreateFileDescriptor(mxfpp::HeaderMetadata *header_metadata);
++    virtual void UpdateFileDescriptor();
++    virtual uint32_t GetSampleSize();
++
++protected:
++    virtual mxfUL ChooseEssenceContainerUL() const;
++
++private:
++    mxfUL mEssenceContainerUL;
++    mxfUL mCodingUL;
++    uint32_t mStoredWidth;
++    uint32_t mStoredHeight;
++    mxfRational mSamplingRate;
++    uint32_t mChannelCount;
++    uint32_t mQuantizationBits;
++};
++
++
++};
++
++
++
++#endif
+--- a/src/mxf_helper/OpaqueMXFDescriptorHelper.cpp
++++ b/src/mxf_helper/OpaqueMXFDescriptorHelper.cpp
+@@ -0,0 +1,169 @@
++/*
++ * Copyright (C) 2026, mxfuse contributors
++ * SPDX-License-Identifier: BSD-3-Clause
++ */
++
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
++#include <bmx/mxf_helper/OpaqueMXFDescriptorHelper.h>
++#include <bmx/BMXTypes.h>
++#include <bmx/BMXException.h>
++#include <bmx/Logging.h>
++
++#include <libMXF++/MXF.h>
++
++using namespace std;
++using namespace bmx;
++using namespace mxfpp;
++
++
++
++bool OpaqueMXFDescriptorHelper::IsSupported(EssenceType essence_type)
++{
++    return essence_type == OPAQUE_PICTURE ||
++           essence_type == OPAQUE_SOUND ||
++           essence_type == OPAQUE_DATA;
++}
++
++MXFDescriptorHelper* OpaqueMXFDescriptorHelper::Create(EssenceType essence_type)
++{
++    BMX_ASSERT(IsSupported(essence_type));
++    OpaqueMXFDescriptorHelper *helper = new OpaqueMXFDescriptorHelper();
++    helper->SetEssenceType(essence_type);
++    return helper;
++}
++
++OpaqueMXFDescriptorHelper::OpaqueMXFDescriptorHelper()
++: MXFDescriptorHelper()
++{
++    mEssenceType = OPAQUE_PICTURE;
++    mEssenceContainerUL = g_Null_UL;
++    mCodingUL = g_Null_UL;
++    mStoredWidth = 0;
++    mStoredHeight = 0;
++    mSamplingRate = SAMPLING_RATE_48K;
++    mChannelCount = 1;
++    mQuantizationBits = 16;
++}
++
++OpaqueMXFDescriptorHelper::~OpaqueMXFDescriptorHelper()
++{
++}
++
++bool OpaqueMXFDescriptorHelper::IsPicture() const
++{
++    return mEssenceType == OPAQUE_PICTURE;
++}
++
++bool OpaqueMXFDescriptorHelper::IsSound() const
++{
++    return mEssenceType == OPAQUE_SOUND;
++}
++
++bool OpaqueMXFDescriptorHelper::IsData() const
++{
++    return mEssenceType == OPAQUE_DATA;
++}
++
++void OpaqueMXFDescriptorHelper::SetEssenceContainerUL(mxfUL essence_container_ul)
++{
++    mEssenceContainerUL = essence_container_ul;
++}
++
++void OpaqueMXFDescriptorHelper::SetPictureCodingUL(mxfUL picture_coding_ul)
++{
++    mCodingUL = picture_coding_ul;
++}
++
++void OpaqueMXFDescriptorHelper::SetStoredWidth(uint32_t width)
++{
++    mStoredWidth = width;
++}
++
++void OpaqueMXFDescriptorHelper::SetStoredHeight(uint32_t height)
++{
++    mStoredHeight = height;
++}
++
++void OpaqueMXFDescriptorHelper::SetSamplingRate(mxfRational sampling_rate)
++{
++    mSamplingRate = sampling_rate;
++}
++
++void OpaqueMXFDescriptorHelper::SetChannelCount(uint32_t count)
++{
++    mChannelCount = count;
++}
++
++void OpaqueMXFDescriptorHelper::SetQuantizationBits(uint32_t bits)
++{
++    mQuantizationBits = bits;
++}
++
++FileDescriptor* OpaqueMXFDescriptorHelper::CreateFileDescriptor(HeaderMetadata *header_metadata)
++{
++    if (mEssenceType == OPAQUE_SOUND) {
++        mFileDescriptor = new WaveAudioDescriptor(header_metadata);
++    } else if (mEssenceType == OPAQUE_DATA) {
++        mFileDescriptor = new GenericDataEssenceDescriptor(header_metadata);
++    } else {
++        mFileDescriptor = new CDCIEssenceDescriptor(header_metadata);
++    }
++    UpdateFileDescriptor();
++    return mFileDescriptor;
++}
++
++void OpaqueMXFDescriptorHelper::UpdateFileDescriptor()
++{
++    MXFDescriptorHelper::UpdateFileDescriptor();
++
++    if (mEssenceType == OPAQUE_SOUND) {
++        WaveAudioDescriptor *wav = dynamic_cast<WaveAudioDescriptor*>(mFileDescriptor);
++        BMX_ASSERT(wav);
++        uint32_t bytes_per_sample = mChannelCount * ((mQuantizationBits + 7) / 8);
++        wav->setAudioSamplingRate(mSamplingRate);
++        wav->setChannelCount(mChannelCount);
++        wav->setQuantizationBits(mQuantizationBits);
++        wav->setLocked(true);
++        wav->setBlockAlign(bytes_per_sample);
++        wav->setAvgBps(bytes_per_sample * mSamplingRate.numerator / mSamplingRate.denominator);
++        if (!mxf_equals_ul(&mCodingUL, &g_Null_UL))
++            wav->setSoundEssenceCompression(mCodingUL);
++        return;
++    }
++
++    if (mEssenceType == OPAQUE_DATA) {
++        GenericDataEssenceDescriptor *data = dynamic_cast<GenericDataEssenceDescriptor*>(mFileDescriptor);
++        BMX_ASSERT(data);
++        if (!mxf_equals_ul(&mCodingUL, &g_Null_UL))
++            data->setDataEssenceCoding(mCodingUL);
++        return;
++    }
++
++    CDCIEssenceDescriptor *cdci = dynamic_cast<CDCIEssenceDescriptor*>(mFileDescriptor);
++    BMX_ASSERT(cdci);
++    cdci->setStoredWidth(mStoredWidth);
++    cdci->setStoredHeight(mStoredHeight);
++    cdci->setSampledWidth(mStoredWidth);
++    cdci->setSampledHeight(mStoredHeight);
++    cdci->setDisplayWidth(mStoredWidth);
++    cdci->setDisplayHeight(mStoredHeight);
++    cdci->setComponentDepth(8);
++    cdci->setHorizontalSubsampling(2);
++    cdci->setVerticalSubsampling(1);
++    cdci->setFrameLayout(MXF_FULL_FRAME);
++    if (!mxf_equals_ul(&mCodingUL, &g_Null_UL))
++        cdci->setPictureEssenceCoding(mCodingUL);
++}
++
++uint32_t OpaqueMXFDescriptorHelper::GetSampleSize()
++{
++    return 0;
++}
++
++mxfUL OpaqueMXFDescriptorHelper::ChooseEssenceContainerUL() const
++{
++    return mEssenceContainerUL;
++}

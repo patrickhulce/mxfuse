@@ -1,0 +1,25 @@
+--- a/include/bmx/EssenceType.h
++++ b/include/bmx/EssenceType.h
+@@ -155,6 +155,10 @@
+     VBI_DATA,
+     // Timed Text data
+     TIMED_TEXT,
++    // Opaque / private codecs (mxfuse)
++    OPAQUE_PICTURE,
++    OPAQUE_SOUND,
++    OPAQUE_DATA,
+ } EssenceType;
+ 
+ 
+--- a/src/common/EssenceType.cpp
++++ b/src/common/EssenceType.cpp
+@@ -148,6 +148,9 @@
+     {ANC_DATA,                  DATA_ESSENCE,           "ANC data",                             "ANC_Data"},
+     {VBI_DATA,                  DATA_ESSENCE,           "VBI data",                             "VBI_Data"},
+     {TIMED_TEXT,                DATA_ESSENCE,           "Timed Text",                           "Timed_Text"},
++    {OPAQUE_PICTURE,            PICTURE_ESSENCE,        "opaque picture",                      "Opaque_Picture"},
++    {OPAQUE_SOUND,              SOUND_ESSENCE,          "opaque sound",                        "Opaque_Sound"},
++    {OPAQUE_DATA,               DATA_ESSENCE,           "opaque data",                         "Opaque_Data"},
+ };
+ 
+ 
