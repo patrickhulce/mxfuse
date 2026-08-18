@@ -308,7 +308,7 @@ impl ByteSink for PythonSink {
             if written.is_none() {
                 return Ok(buf.len());
             }
-            written.extract::<usize>().or(Ok(buf.len()))
+            written.extract::<usize>().map_err(py_io_error)
         })
     }
 
@@ -380,12 +380,16 @@ impl PyWriter {
     fn __exit__(
         &mut self,
         py: Python<'_>,
-        _exc_type: Bound<'_, PyAny>,
+        exc_type: Bound<'_, PyAny>,
         _exc: Bound<'_, PyAny>,
         _tb: Bound<'_, PyAny>,
     ) -> PyResult<bool> {
         if self.inner.is_some() {
-            self.finish(py)?;
+            if exc_type.is_none() {
+                self.finish(py)?;
+            } else {
+                self.close();
+            }
         }
         Ok(false)
     }

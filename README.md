@@ -98,9 +98,9 @@ const writer = await writeMxf("output.mxf", {
     { essenceType: EssenceType.WAVE_PCM, samplingRate: 48000 },
   ],
 });
-for (const [image, audio] of zip(images, audios)) {
-  await writer.write(0, image);
-  await writer.write(1, audio);
+for (let i = 0; i < images.length; i++) {
+  await writer.write(0, images[i]);
+  await writer.write(1, audios[i]);
 }
 await writer.finish();
 ```
