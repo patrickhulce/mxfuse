@@ -46,13 +46,19 @@ fn main() {
     add_link_search(&dst);
     add_link_search(&dst.join("lib"));
     add_link_search(&dst.join("lib64"));
+    add_link_search(&dst.join("lib").join("Release"));
     add_link_search(&out_dir);
 
     println!("cargo:rustc-link-lib=static=bmx");
     println!("cargo:rustc-link-lib=static=MXF++");
     println!("cargo:rustc-link-lib=static=MXF");
     println!("cargo:rustc-link-lib=static=uriparser");
-    println!("cargo:rustc-link-lib=static=expat");
+    // MSVC libexpat uses OUTPUT_NAME libexpat plus a RELEASE_POSTFIX of MD.
+    if target_os == "windows" {
+        println!("cargo:rustc-link-lib=static=libexpatMD");
+    } else {
+        println!("cargo:rustc-link-lib=static=expat");
+    }
 
     if target_os == "linux" {
         println!("cargo:rustc-link-lib=static=uuid_stub");
