@@ -2,8 +2,11 @@ import { readFile } from "node:fs/promises";
 
 import {
   NativeClip,
+  NativeWriter,
   openMxfFromBuffer,
   openMxfFromPath,
+  writeMxfToPath,
+  type NativeClipSpec,
   type NativeReadOptions,
 } from "../binding.js";
 
@@ -22,6 +25,42 @@ export interface ReadOptions {
   cacheBytes?: number;
 }
 
+export const EssenceType = {
+  UNKNOWN: 0,
+  UNC_HD_1080P: 35,
+  WAVE_PCM: 90,
+  OPAQUE_PICTURE: 97,
+  OPAQUE_SOUND: 98,
+  OPAQUE_DATA: 99,
+} as const;
+
+export type EssenceType = (typeof EssenceType)[keyof typeof EssenceType];
+
+export const Flavour = {
+  DEFAULT: 0,
+  SINGLE_PASS: 0x0008,
+} as const;
+
+export type Flavour = (typeof Flavour)[keyof typeof Flavour];
+
+export interface TrackSpec {
+  essenceType: EssenceType | number;
+  samplingRate?: number;
+  channelCount?: number;
+  quantizationBits?: number;
+  storedWidth?: number;
+  storedHeight?: number;
+  essenceContainerUl?: Uint8Array;
+  pictureCodingUl?: Uint8Array;
+}
+
+export interface ClipSpec {
+  editRate: readonly [number, number];
+  tracks: readonly TrackSpec[];
+  flavour?: Flavour | number;
+  duration?: number;
+}
+
 export interface Track {
   index: number;
   kind: TrackKind;
@@ -35,6 +74,8 @@ export interface Frame {
   data: Uint8Array;
   elementKey: Uint8Array;
   filePosition: number;
+  klSize: number;
+  position: number;
 }
 
 export interface Package {
@@ -45,6 +86,29 @@ function toNativeOptions(options: ReadOptions = {}): NativeReadOptions {
   return {
     readAhead: options.readAhead,
     cacheBytes: options.cacheBytes,
+  };
+}
+
+function toNativeClipSpec(spec: ClipSpec): NativeClipSpec {
+  return {
+    editRateNum: spec.editRate[0],
+    editRateDen: spec.editRate[1],
+    flavour: spec.flavour,
+    duration: spec.duration,
+    tracks: spec.tracks.map((track) => ({
+      essenceType: track.essenceType,
+      samplingRate: track.samplingRate,
+      channelCount: track.channelCount,
+      quantizationBits: track.quantizationBits,
+      storedWidth: track.storedWidth,
+      storedHeight: track.storedHeight,
+      essenceContainerUl: track.essenceContainerUl
+        ? Buffer.from(track.essenceContainerUl)
+        : undefined,
+      pictureCodingUl: track.pictureCodingUl
+        ? Buffer.from(track.pictureCodingUl)
+        : undefined,
+    })),
   };
 }
 
@@ -102,8 +166,30 @@ export class Clip {
         data: Uint8Array.from(frame.data),
         elementKey: Uint8Array.from(frame.elementKey),
         filePosition: frame.filePosition,
+        klSize: frame.klSize,
+        position: frame.position,
       })),
     }));
+  }
+
+  public async close(): Promise<void> {
+    await this.native.close();
+  }
+}
+
+/**
+ * An opened MXF writer. One writer per task; do not share across concurrent
+ * async work. Writes go to a real path, not an in-memory buffer.
+ */
+export class ClipWriter {
+  public constructor(private readonly native: NativeWriter) {}
+
+  public async write(trackIndex: number, data: Uint8Array): Promise<void> {
+    await this.native.write(trackIndex, Buffer.from(data));
+  }
+
+  public async finish(): Promise<void> {
+    await this.native.finish();
   }
 
   public async close(): Promise<void> {
@@ -137,6 +223,13 @@ export async function openMxfFile(
   options: ReadOptions = {},
 ): Promise<Clip> {
   return openMxf(path, options);
+}
+
+export async function writeMxf(
+  dest: string,
+  spec: ClipSpec,
+): Promise<ClipWriter> {
+  return new ClipWriter(await writeMxfToPath(dest, toNativeClipSpec(spec)));
 }
 
 export async function readMxfBuffer(path: string): Promise<Uint8Array> {
