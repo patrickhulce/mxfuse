@@ -1,8 +1,18 @@
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 
-from mxfuse import ReadOptions, TrackKind, open_mxf
+from mxfuse import (
+    ClipSpec,
+    EssenceType,
+    Flavour,
+    ReadOptions,
+    TrackKind,
+    TrackSpec,
+    open_mxf,
+    write_mxf,
+)
 
 FIXTURE = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "sample_op1a.mxf"
 
@@ -73,3 +83,36 @@ def test_read_ahead_amortizes_small_reads() -> None:
     finally:
         bare.close()
         cached.close()
+
+
+def test_write_round_trip_unc_and_pcm() -> None:
+    picture = bytes([0x11]) * (1920 * 1080 * 2)
+    audio = bytes([0x33]) * (1920 * 2)
+    sink = BytesIO()
+    spec = ClipSpec(
+        edit_rate=(25, 1),
+        flavour=Flavour.DEFAULT,
+        duration=1,
+        tracks=[
+            TrackSpec(EssenceType.UNC_HD_1080P),
+            TrackSpec(
+                EssenceType.WAVE_PCM,
+                sampling_rate=48000,
+                channel_count=1,
+                quantization_bits=16,
+            ),
+        ],
+    )
+    with write_mxf(sink, spec) as clip:
+        clip.write(0, picture)
+        clip.write(1, audio)
+    sink.seek(0)
+    with open_mxf(sink) as clip:
+        assert clip.duration == 1
+        assert len(clip.tracks) == 2
+        clip.select(clip.tracks)
+        clip.seek(0)
+        packages = list(clip.read(count=1))
+        assert packages[0].frames[0].data == picture
+        assert packages[0].frames[1].data == audio
+        assert packages[0].frames[0].kl_size > 0
