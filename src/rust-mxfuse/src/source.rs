@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -38,6 +38,47 @@ impl ByteSource for Cursor<Vec<u8>> {
 
     fn size(&mut self) -> io::Result<u64> {
         Ok(self.get_ref().len() as u64)
+    }
+}
+
+/// A synchronous byte sink for writing MXF.
+///
+/// `SINGLE_PASS` flavour never seeks backward, so a non-seekable sink
+/// (pipe, socket) is valid when duration is known and the codec is CBE.
+pub trait ByteSink: Send {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize>;
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64>;
+    fn tell(&mut self) -> io::Result<u64>;
+    fn is_seekable(&self) -> bool {
+        true
+    }
+}
+
+impl ByteSink for File {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        Write::write(self, buf)
+    }
+
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        Seek::seek(self, pos)
+    }
+
+    fn tell(&mut self) -> io::Result<u64> {
+        Seek::seek(self, SeekFrom::Current(0))
+    }
+}
+
+impl ByteSink for Cursor<Vec<u8>> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        Write::write(self, buf)
+    }
+
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        Seek::seek(self, pos)
+    }
+
+    fn tell(&mut self) -> io::Result<u64> {
+        Ok(self.position())
     }
 }
 

@@ -3,7 +3,7 @@ name = "mxfuse"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Read MXF files through a statically linked bmx core"
+description = "Read and write MXF files through a statically linked bmx core"
 readme = "../../README.md"
 exclude = ["../../vendor/bmx/apps", "../../vendor/bmx/tools", "../../vendor/bmx/meta"]
 

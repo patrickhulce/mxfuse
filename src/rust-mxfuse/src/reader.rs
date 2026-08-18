@@ -87,11 +87,21 @@ unsafe extern "C" fn src_close(ctx: *mut c_void) {
     drop(Box::from_raw(ctx as *mut SourceBox));
 }
 
+unsafe extern "C" fn src_write(_ctx: *mut c_void, _data: *const u8, _count: u32) -> i32 {
+    -1
+}
+
+unsafe extern "C" fn src_is_seekable(_ctx: *mut c_void) -> c_int {
+    1
+}
+
 const VTABLE: MxfuseByteSourceVtable = MxfuseByteSourceVtable {
     read: Some(src_read),
+    write: Some(src_write),
     seek: Some(src_seek),
     tell: Some(src_tell),
     size: Some(src_size),
+    is_seekable: Some(src_is_seekable),
     close: Some(src_close),
 };
 
