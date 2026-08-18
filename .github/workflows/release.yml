@@ -116,6 +116,6 @@ jobs:
           pattern: napi-*
       - working-directory: src/node-mxfuse
         run: |
-          pnpm exec napi create-npm-dir
-          pnpm exec napi artifacts --dir ../../artifacts --dist npm
+          pnpm exec napi create-npm-dir -t .
+          pnpm exec napi artifacts --dir ../../artifacts --dist npm -c package.json
       - run: chmod +x scripts/check-napi-artifacts.sh && ./scripts/check-napi-artifacts.sh
