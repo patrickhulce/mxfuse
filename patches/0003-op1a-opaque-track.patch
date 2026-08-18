@@ -51,7 +51,7 @@
      bmx/mxf_op1a/OP1AVBIDataTrack.h
 --- a/include/bmx/mxf_op1a/OP1AOpaqueTrack.h
 +++ b/include/bmx/mxf_op1a/OP1AOpaqueTrack.h
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,49 @@
 +/*
 + * Copyright (C) 2026, mxfuse contributors
 + * SPDX-License-Identifier: BSD-3-Clause
@@ -77,13 +77,22 @@
 +                    mxfRational frame_rate, EssenceType essence_type);
 +    virtual ~OP1AOpaqueTrack();
 +
++    void SetElementType(uint8_t element_type);
++    void SetElementLLen(uint8_t llen);
++    void SetTemporalReordering(bool enable);
++
 +protected:
 +    virtual void PrepareWrite(uint8_t track_count);
 +    virtual void WriteSamplesInt(const unsigned char *data, uint32_t size, uint32_t num_samples);
 +
 +private:
++    void ApplyElementKey();
++
 +    OpaqueMXFDescriptorHelper *mOpaqueDescriptorHelper;
 +    int64_t mPosition;
++    uint8_t mElementType;
++    uint8_t mElementLLen;
++    bool mTemporalReordering;
 +};
 +
 +
@@ -94,7 +103,7 @@
 +#endif
 --- a/src/mxf_op1a/OP1AOpaqueTrack.cpp
 +++ b/src/mxf_op1a/OP1AOpaqueTrack.cpp
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,92 @@
 +/*
 + * Copyright (C) 2026, mxfuse contributors
 + * SPDX-License-Identifier: BSD-3-Clause
@@ -115,34 +124,51 @@
 +
 +
 +
-+static const mxfKey PICTURE_ELEMENT_KEY = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x15, 0x01, 0x7F, 0x00);
-+static const mxfKey SOUND_ELEMENT_KEY   = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x16, 0x01, 0x7F, 0x00);
-+static const mxfKey DATA_ELEMENT_KEY    = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x17, 0x01, 0x7F, 0x00);
-+
-+
-+
 +OP1AOpaqueTrack::OP1AOpaqueTrack(OP1AFile *file, uint32_t track_index, uint32_t track_id, uint8_t track_type_number,
 +                                 mxfRational frame_rate, EssenceType essence_type)
 +: OP1ATrack(file, track_index, track_id, track_type_number, frame_rate, essence_type)
 +{
 +    mOpaqueDescriptorHelper = dynamic_cast<OpaqueMXFDescriptorHelper*>(mDescriptorHelper);
 +    BMX_ASSERT(mOpaqueDescriptorHelper);
-+
-+    if (essence_type == OPAQUE_SOUND) {
-+        mTrackNumber = MXF_TRACK_NUM(0x16, 0x01, 0x7F, 0x00);
-+        mEssenceElementKey = SOUND_ELEMENT_KEY;
-+    } else if (essence_type == OPAQUE_DATA) {
-+        mTrackNumber = MXF_TRACK_NUM(0x17, 0x01, 0x7F, 0x00);
-+        mEssenceElementKey = DATA_ELEMENT_KEY;
-+    } else {
-+        mTrackNumber = MXF_TRACK_NUM(0x15, 0x01, 0x7F, 0x00);
-+        mEssenceElementKey = PICTURE_ELEMENT_KEY;
-+    }
 +    mPosition = 0;
++    mElementType = 0x7F;
++    mElementLLen = 4;
++    mTemporalReordering = false;
++    ApplyElementKey();
 +}
 +
 +OP1AOpaqueTrack::~OP1AOpaqueTrack()
 +{
++}
++
++void OP1AOpaqueTrack::SetElementType(uint8_t element_type)
++{
++    mElementType = element_type;
++    ApplyElementKey();
++}
++
++void OP1AOpaqueTrack::SetElementLLen(uint8_t llen)
++{
++    mElementLLen = llen ? llen : 4;
++}
++
++void OP1AOpaqueTrack::SetTemporalReordering(bool enable)
++{
++    mTemporalReordering = enable;
++}
++
++void OP1AOpaqueTrack::ApplyElementKey()
++{
++    if (mEssenceType == OPAQUE_SOUND) {
++        mTrackNumber = MXF_TRACK_NUM(0x16, 0x01, mElementType, 0x00);
++        mEssenceElementKey = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x16, 0x01, mElementType, 0x00);
++    } else if (mEssenceType == OPAQUE_DATA) {
++        mTrackNumber = MXF_TRACK_NUM(0x17, 0x01, mElementType, 0x00);
++        mEssenceElementKey = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x17, 0x01, mElementType, 0x00);
++    } else {
++        mTrackNumber = MXF_TRACK_NUM(0x15, 0x01, mElementType, 0x00);
++        mEssenceElementKey = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x15, 0x01, mElementType, 0x00);
++    }
 +}
 +
 +void OP1AOpaqueTrack::PrepareWrite(uint8_t track_count)
@@ -150,14 +176,14 @@
 +    CompleteEssenceKeyAndTrackNum(track_count);
 +
 +    if (mEssenceType == OPAQUE_SOUND) {
-+        mCPManager->RegisterSoundTrackElement(mTrackIndex, mEssenceElementKey, 4);
++        mCPManager->RegisterSoundTrackElement(mTrackIndex, mEssenceElementKey, mElementLLen);
 +        mIndexTable->RegisterSoundTrackElement(mTrackIndex);
 +    } else if (mEssenceType == OPAQUE_DATA) {
 +        mCPManager->RegisterDataTrackElement(mTrackIndex, mEssenceElementKey, 0, 0);
 +        mIndexTable->RegisterDataTrackElement(mTrackIndex, false);
 +    } else {
-+        mCPManager->RegisterPictureTrackElement(mTrackIndex, mEssenceElementKey, false);
-+        mIndexTable->RegisterPictureTrackElement(mTrackIndex, false, false);
++        mCPManager->RegisterPictureTrackElement(mTrackIndex, mEssenceElementKey, false, mElementLLen);
++        mIndexTable->RegisterPictureTrackElement(mTrackIndex, false, mTemporalReordering);
 +    }
 +}
 +
