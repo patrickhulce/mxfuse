@@ -1,0 +1,629 @@
+#!/usr/bin/env python3
+"""Generate the opaque-essence unified diffs under patches/."""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+VENDOR = ROOT / "vendor" / "bmx"
+PATCHES = ROOT / "patches"
+
+
+def run_diff(old: Path, new: Path, rel: str) -> str:
+    result = subprocess.run(
+        ["diff", "-u", "-N", "--label", f"a/{rel}", "--label", f"b/{rel}", str(old), str(new)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode not in (0, 1):
+        raise RuntimeError(result.stderr)
+    return result.stdout
+
+
+def write_file(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+OPAQUE_HELPER_H = r'''/*
+ * Copyright (C) 2026, mxfuse contributors
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Opaque essence helper: caller-supplied container and coding ULs.
+ */
+
+#ifndef BMX_OPAQUE_MXF_DESCRIPTOR_HELPER_H_
+#define BMX_OPAQUE_MXF_DESCRIPTOR_HELPER_H_
+
+
+#include <bmx/mxf_helper/MXFDescriptorHelper.h>
+
+
+
+namespace bmx
+{
+
+
+class OpaqueMXFDescriptorHelper : public MXFDescriptorHelper
+{
+public:
+    static bool IsSupported(EssenceType essence_type);
+    static MXFDescriptorHelper* Create(EssenceType essence_type);
+
+public:
+    OpaqueMXFDescriptorHelper();
+    virtual ~OpaqueMXFDescriptorHelper();
+
+    virtual bool IsPicture() const;
+    virtual bool IsSound() const;
+    virtual bool IsData() const;
+
+public:
+    void SetEssenceContainerUL(mxfUL essence_container_ul);
+    void SetPictureCodingUL(mxfUL picture_coding_ul);
+    void SetStoredWidth(uint32_t width);
+    void SetStoredHeight(uint32_t height);
+    void SetSamplingRate(mxfRational sampling_rate);
+    void SetChannelCount(uint32_t count);
+    void SetQuantizationBits(uint32_t bits);
+
+    virtual mxfpp::FileDescriptor* CreateFileDescriptor(mxfpp::HeaderMetadata *header_metadata);
+    virtual void UpdateFileDescriptor();
+    virtual uint32_t GetSampleSize();
+
+protected:
+    virtual mxfUL ChooseEssenceContainerUL() const;
+
+private:
+    mxfUL mEssenceContainerUL;
+    mxfUL mCodingUL;
+    uint32_t mStoredWidth;
+    uint32_t mStoredHeight;
+    mxfRational mSamplingRate;
+    uint32_t mChannelCount;
+    uint32_t mQuantizationBits;
+};
+
+
+};
+
+
+
+#endif
+'''
+
+OPAQUE_HELPER_CPP = r'''/*
+ * Copyright (C) 2026, mxfuse contributors
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#include <bmx/mxf_helper/OpaqueMXFDescriptorHelper.h>
+#include <bmx/BMXTypes.h>
+#include <bmx/BMXException.h>
+#include <bmx/Logging.h>
+
+#include <libMXF++/MXF.h>
+
+using namespace std;
+using namespace bmx;
+using namespace mxfpp;
+
+
+
+bool OpaqueMXFDescriptorHelper::IsSupported(EssenceType essence_type)
+{
+    return essence_type == OPAQUE_PICTURE ||
+           essence_type == OPAQUE_SOUND ||
+           essence_type == OPAQUE_DATA;
+}
+
+MXFDescriptorHelper* OpaqueMXFDescriptorHelper::Create(EssenceType essence_type)
+{
+    BMX_ASSERT(IsSupported(essence_type));
+    OpaqueMXFDescriptorHelper *helper = new OpaqueMXFDescriptorHelper();
+    helper->SetEssenceType(essence_type);
+    return helper;
+}
+
+OpaqueMXFDescriptorHelper::OpaqueMXFDescriptorHelper()
+: MXFDescriptorHelper()
+{
+    mEssenceType = OPAQUE_PICTURE;
+    mEssenceContainerUL = g_Null_UL;
+    mCodingUL = g_Null_UL;
+    mStoredWidth = 0;
+    mStoredHeight = 0;
+    mSamplingRate = SAMPLING_RATE_48K;
+    mChannelCount = 1;
+    mQuantizationBits = 16;
+}
+
+OpaqueMXFDescriptorHelper::~OpaqueMXFDescriptorHelper()
+{
+}
+
+bool OpaqueMXFDescriptorHelper::IsPicture() const
+{
+    return mEssenceType == OPAQUE_PICTURE;
+}
+
+bool OpaqueMXFDescriptorHelper::IsSound() const
+{
+    return mEssenceType == OPAQUE_SOUND;
+}
+
+bool OpaqueMXFDescriptorHelper::IsData() const
+{
+    return mEssenceType == OPAQUE_DATA;
+}
+
+void OpaqueMXFDescriptorHelper::SetEssenceContainerUL(mxfUL essence_container_ul)
+{
+    mEssenceContainerUL = essence_container_ul;
+}
+
+void OpaqueMXFDescriptorHelper::SetPictureCodingUL(mxfUL picture_coding_ul)
+{
+    mCodingUL = picture_coding_ul;
+}
+
+void OpaqueMXFDescriptorHelper::SetStoredWidth(uint32_t width)
+{
+    mStoredWidth = width;
+}
+
+void OpaqueMXFDescriptorHelper::SetStoredHeight(uint32_t height)
+{
+    mStoredHeight = height;
+}
+
+void OpaqueMXFDescriptorHelper::SetSamplingRate(mxfRational sampling_rate)
+{
+    mSamplingRate = sampling_rate;
+}
+
+void OpaqueMXFDescriptorHelper::SetChannelCount(uint32_t count)
+{
+    mChannelCount = count;
+}
+
+void OpaqueMXFDescriptorHelper::SetQuantizationBits(uint32_t bits)
+{
+    mQuantizationBits = bits;
+}
+
+FileDescriptor* OpaqueMXFDescriptorHelper::CreateFileDescriptor(HeaderMetadata *header_metadata)
+{
+    if (mEssenceType == OPAQUE_SOUND) {
+        mFileDescriptor = new WaveAudioDescriptor(header_metadata);
+    } else if (mEssenceType == OPAQUE_DATA) {
+        mFileDescriptor = new GenericDataEssenceDescriptor(header_metadata);
+    } else {
+        mFileDescriptor = new CDCIEssenceDescriptor(header_metadata);
+    }
+    UpdateFileDescriptor();
+    return mFileDescriptor;
+}
+
+void OpaqueMXFDescriptorHelper::UpdateFileDescriptor()
+{
+    MXFDescriptorHelper::UpdateFileDescriptor();
+
+    if (mEssenceType == OPAQUE_SOUND) {
+        WaveAudioDescriptor *wav = dynamic_cast<WaveAudioDescriptor*>(mFileDescriptor);
+        BMX_ASSERT(wav);
+        uint32_t bytes_per_sample = mChannelCount * ((mQuantizationBits + 7) / 8);
+        wav->setAudioSamplingRate(mSamplingRate);
+        wav->setChannelCount(mChannelCount);
+        wav->setQuantizationBits(mQuantizationBits);
+        wav->setLocked(true);
+        wav->setBlockAlign(bytes_per_sample);
+        wav->setAvgBps(bytes_per_sample * mSamplingRate.numerator / mSamplingRate.denominator);
+        if (!mxf_equals_ul(&mCodingUL, &g_Null_UL))
+            wav->setSoundEssenceCompression(mCodingUL);
+        return;
+    }
+
+    if (mEssenceType == OPAQUE_DATA) {
+        GenericDataEssenceDescriptor *data = dynamic_cast<GenericDataEssenceDescriptor*>(mFileDescriptor);
+        BMX_ASSERT(data);
+        if (!mxf_equals_ul(&mCodingUL, &g_Null_UL))
+            data->setDataEssenceCoding(mCodingUL);
+        return;
+    }
+
+    CDCIEssenceDescriptor *cdci = dynamic_cast<CDCIEssenceDescriptor*>(mFileDescriptor);
+    BMX_ASSERT(cdci);
+    cdci->setStoredWidth(mStoredWidth);
+    cdci->setStoredHeight(mStoredHeight);
+    cdci->setSampledWidth(mStoredWidth);
+    cdci->setSampledHeight(mStoredHeight);
+    cdci->setDisplayWidth(mStoredWidth);
+    cdci->setDisplayHeight(mStoredHeight);
+    cdci->setComponentDepth(8);
+    cdci->setHorizontalSubsampling(2);
+    cdci->setVerticalSubsampling(1);
+    cdci->setFrameLayout(MXF_FULL_FRAME);
+    if (!mxf_equals_ul(&mCodingUL, &g_Null_UL))
+        cdci->setPictureEssenceCoding(mCodingUL);
+}
+
+uint32_t OpaqueMXFDescriptorHelper::GetSampleSize()
+{
+    return 0;
+}
+
+mxfUL OpaqueMXFDescriptorHelper::ChooseEssenceContainerUL() const
+{
+    return mEssenceContainerUL;
+}
+'''
+
+OPAQUE_TRACK_H = r'''/*
+ * Copyright (C) 2026, mxfuse contributors
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#ifndef BMX_OP1A_OPAQUE_TRACK_H_
+#define BMX_OP1A_OPAQUE_TRACK_H_
+
+
+#include <bmx/mxf_op1a/OP1ATrack.h>
+#include <bmx/mxf_helper/OpaqueMXFDescriptorHelper.h>
+
+
+
+namespace bmx
+{
+
+
+class OP1AOpaqueTrack : public OP1ATrack
+{
+public:
+    OP1AOpaqueTrack(OP1AFile *file, uint32_t track_index, uint32_t track_id, uint8_t track_type_number,
+                    mxfRational frame_rate, EssenceType essence_type);
+    virtual ~OP1AOpaqueTrack();
+
+protected:
+    virtual void PrepareWrite(uint8_t track_count);
+    virtual void WriteSamplesInt(const unsigned char *data, uint32_t size, uint32_t num_samples);
+
+private:
+    OpaqueMXFDescriptorHelper *mOpaqueDescriptorHelper;
+    int64_t mPosition;
+};
+
+
+};
+
+
+
+#endif
+'''
+
+OPAQUE_TRACK_CPP = r'''/*
+ * Copyright (C) 2026, mxfuse contributors
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#include <bmx/mxf_op1a/OP1AOpaqueTrack.h>
+#include <bmx/mxf_op1a/OP1AFile.h>
+#include <bmx/BMXException.h>
+#include <bmx/Logging.h>
+
+using namespace std;
+using namespace bmx;
+using namespace mxfpp;
+
+
+
+static const mxfKey PICTURE_ELEMENT_KEY = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x15, 0x01, 0x7F, 0x00);
+static const mxfKey SOUND_ELEMENT_KEY   = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x16, 0x01, 0x7F, 0x00);
+static const mxfKey DATA_ELEMENT_KEY    = MXF_GENERIC_CONTAINER_ELEMENT_KEY(0x01, 0x17, 0x01, 0x7F, 0x00);
+
+
+
+OP1AOpaqueTrack::OP1AOpaqueTrack(OP1AFile *file, uint32_t track_index, uint32_t track_id, uint8_t track_type_number,
+                                 mxfRational frame_rate, EssenceType essence_type)
+: OP1ATrack(file, track_index, track_id, track_type_number, frame_rate, essence_type)
+{
+    mOpaqueDescriptorHelper = dynamic_cast<OpaqueMXFDescriptorHelper*>(mDescriptorHelper);
+    BMX_ASSERT(mOpaqueDescriptorHelper);
+
+    if (essence_type == OPAQUE_SOUND) {
+        mTrackNumber = MXF_TRACK_NUM(0x16, 0x01, 0x7F, 0x00);
+        mEssenceElementKey = SOUND_ELEMENT_KEY;
+    } else if (essence_type == OPAQUE_DATA) {
+        mTrackNumber = MXF_TRACK_NUM(0x17, 0x01, 0x7F, 0x00);
+        mEssenceElementKey = DATA_ELEMENT_KEY;
+    } else {
+        mTrackNumber = MXF_TRACK_NUM(0x15, 0x01, 0x7F, 0x00);
+        mEssenceElementKey = PICTURE_ELEMENT_KEY;
+    }
+    mPosition = 0;
+}
+
+OP1AOpaqueTrack::~OP1AOpaqueTrack()
+{
+}
+
+void OP1AOpaqueTrack::PrepareWrite(uint8_t track_count)
+{
+    CompleteEssenceKeyAndTrackNum(track_count);
+
+    if (mEssenceType == OPAQUE_SOUND) {
+        mCPManager->RegisterSoundTrackElement(mTrackIndex, mEssenceElementKey, 4);
+        mIndexTable->RegisterSoundTrackElement(mTrackIndex);
+    } else if (mEssenceType == OPAQUE_DATA) {
+        mCPManager->RegisterDataTrackElement(mTrackIndex, mEssenceElementKey, 0, 0);
+        mIndexTable->RegisterDataTrackElement(mTrackIndex, false);
+    } else {
+        mCPManager->RegisterPictureTrackElement(mTrackIndex, mEssenceElementKey, false);
+        mIndexTable->RegisterPictureTrackElement(mTrackIndex, false, false);
+    }
+}
+
+void OP1AOpaqueTrack::WriteSamplesInt(const unsigned char *data, uint32_t size, uint32_t num_samples)
+{
+    BMX_CHECK(num_samples == 1);
+    BMX_CHECK(data && size);
+
+    mCPManager->WriteSamples(mTrackIndex, data, size, num_samples);
+    mIndexTable->AddIndexEntry(mTrackIndex, mPosition, 0, 0, 0x80, true, false);
+    mPosition++;
+}
+'''
+
+
+def patch_essence_type_h(text: str) -> str:
+    return text.replace(
+        "    TIMED_TEXT,\n} EssenceType;",
+        "    TIMED_TEXT,\n"
+        "    // Opaque / private codecs (mxfuse)\n"
+        "    OPAQUE_PICTURE,\n"
+        "    OPAQUE_SOUND,\n"
+        "    OPAQUE_DATA,\n"
+        "} EssenceType;",
+    )
+
+
+def patch_essence_type_cpp(text: str) -> str:
+    return text.replace(
+        '    {TIMED_TEXT,                DATA_ESSENCE,           "Timed Text",                           "Timed_Text"},\n};',
+        '    {TIMED_TEXT,                DATA_ESSENCE,           "Timed Text",                           "Timed_Text"},\n'
+        '    {OPAQUE_PICTURE,            PICTURE_ESSENCE,        "opaque picture",                      "Opaque_Picture"},\n'
+        '    {OPAQUE_SOUND,              SOUND_ESSENCE,          "opaque sound",                        "Opaque_Sound"},\n'
+        '    {OPAQUE_DATA,               DATA_ESSENCE,           "opaque data",                         "Opaque_Data"},\n'
+        "};",
+    )
+
+
+def patch_descriptor_helper_cpp(text: str) -> str:
+    if "#include <bmx/mxf_helper/OpaqueMXFDescriptorHelper.h>" not in text:
+        text = text.replace(
+            "#include <bmx/mxf_helper/TimedTextMXFDescriptorHelper.h>",
+            "#include <bmx/mxf_helper/TimedTextMXFDescriptorHelper.h>\n"
+            "#include <bmx/mxf_helper/OpaqueMXFDescriptorHelper.h>",
+        )
+    old = """MXFDescriptorHelper* MXFDescriptorHelper::Create(EssenceType essence_type)
+{
+    if (PictureMXFDescriptorHelper::IsSupported(essence_type))
+        return PictureMXFDescriptorHelper::Create(essence_type);
+    else if (SoundMXFDescriptorHelper::IsSupported(essence_type))
+        return SoundMXFDescriptorHelper::Create(essence_type);
+    else if (DataMXFDescriptorHelper::IsSupported(essence_type))
+        return DataMXFDescriptorHelper::Create(essence_type);
+"""
+    new = """MXFDescriptorHelper* MXFDescriptorHelper::Create(EssenceType essence_type)
+{
+    if (OpaqueMXFDescriptorHelper::IsSupported(essence_type))
+        return OpaqueMXFDescriptorHelper::Create(essence_type);
+    if (PictureMXFDescriptorHelper::IsSupported(essence_type))
+        return PictureMXFDescriptorHelper::Create(essence_type);
+    else if (SoundMXFDescriptorHelper::IsSupported(essence_type))
+        return SoundMXFDescriptorHelper::Create(essence_type);
+    else if (DataMXFDescriptorHelper::IsSupported(essence_type))
+        return DataMXFDescriptorHelper::Create(essence_type);
+"""
+    if old not in text:
+        raise SystemExit("MXFDescriptorHelper::Create block not found")
+    return text.replace(old, new)
+
+
+def patch_helper_src_cmake(text: str) -> str:
+    return text.replace(
+        "    mxf_helper/MXFDescriptorHelper.cpp\n",
+        "    mxf_helper/MXFDescriptorHelper.cpp\n    mxf_helper/OpaqueMXFDescriptorHelper.cpp\n",
+    )
+
+
+def patch_helper_hdr_cmake(text: str) -> str:
+    return text.replace(
+        "    bmx/mxf_helper/MXFDescriptorHelper.h\n",
+        "    bmx/mxf_helper/MXFDescriptorHelper.h\n    bmx/mxf_helper/OpaqueMXFDescriptorHelper.h\n",
+    )
+
+
+def patch_op1a_track_cpp(text: str) -> str:
+    if "#include <bmx/mxf_op1a/OP1AOpaqueTrack.h>" not in text:
+        text = text.replace(
+            "#include <bmx/mxf_op1a/OP1ATimedTextTrack.h>",
+            "#include <bmx/mxf_op1a/OP1ATimedTextTrack.h>\n"
+            "#include <bmx/mxf_op1a/OP1AOpaqueTrack.h>",
+        )
+    text = text.replace(
+        "    {TIMED_TEXT,               {{-1, -1}, {0, 0}}},\n};",
+        "    {TIMED_TEXT,               {{-1, -1}, {0, 0}}},\n"
+        "    {OPAQUE_PICTURE,           {{-1, -1}, {0, 0}}},\n"
+        "    {OPAQUE_SOUND,             {{-1, -1}, {0, 0}}},\n"
+        "    {OPAQUE_DATA,              {{-1, -1}, {0, 0}}},\n"
+        "};",
+    )
+    text = text.replace(
+        "        case TIMED_TEXT:\n"
+        "            return new OP1ATimedTextTrack(file, track_index, track_id, track_type_number, frame_rate, essence_type);\n"
+        "        default:",
+        "        case TIMED_TEXT:\n"
+        "            return new OP1ATimedTextTrack(file, track_index, track_id, track_type_number, frame_rate, essence_type);\n"
+        "        case OPAQUE_PICTURE:\n"
+        "        case OPAQUE_SOUND:\n"
+        "        case OPAQUE_DATA:\n"
+        "            return new OP1AOpaqueTrack(file, track_index, track_id, track_type_number, frame_rate, essence_type);\n"
+        "        default:",
+    )
+    return text
+
+
+def patch_op1a_src_cmake(text: str) -> str:
+    return text.replace(
+        "    mxf_op1a/OP1ATrack.cpp\n",
+        "    mxf_op1a/OP1AOpaqueTrack.cpp\n    mxf_op1a/OP1ATrack.cpp\n",
+    )
+
+
+def patch_op1a_hdr_cmake(text: str) -> str:
+    return text.replace(
+        "    bmx/mxf_op1a/OP1ATrack.h\n",
+        "    bmx/mxf_op1a/OP1AOpaqueTrack.h\n    bmx/mxf_op1a/OP1ATrack.h\n",
+    )
+
+
+def main() -> None:
+    PATCHES.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        old = Path(tmp) / "old"
+        new = Path(tmp) / "new"
+        shutil.copytree(VENDOR, old, ignore=shutil.ignore_patterns(".git"))
+        shutil.copytree(old, new)
+
+        write_file(
+            new / "include/bmx/EssenceType.h",
+            patch_essence_type_h((old / "include/bmx/EssenceType.h").read_text()),
+        )
+        write_file(
+            new / "src/common/EssenceType.cpp",
+            patch_essence_type_cpp((old / "src/common/EssenceType.cpp").read_text()),
+        )
+        write_file(
+            new / "src/mxf_helper/MXFDescriptorHelper.cpp",
+            patch_descriptor_helper_cpp((old / "src/mxf_helper/MXFDescriptorHelper.cpp").read_text()),
+        )
+        write_file(
+            new / "src/mxf_helper/CMakeLists.txt",
+            patch_helper_src_cmake((old / "src/mxf_helper/CMakeLists.txt").read_text()),
+        )
+        write_file(
+            new / "include/bmx/mxf_helper/CMakeLists.txt",
+            patch_helper_hdr_cmake((old / "include/bmx/mxf_helper/CMakeLists.txt").read_text()),
+        )
+        write_file(new / "include/bmx/mxf_helper/OpaqueMXFDescriptorHelper.h", OPAQUE_HELPER_H)
+        write_file(new / "src/mxf_helper/OpaqueMXFDescriptorHelper.cpp", OPAQUE_HELPER_CPP)
+        write_file(
+            new / "src/mxf_op1a/OP1ATrack.cpp",
+            patch_op1a_track_cpp((old / "src/mxf_op1a/OP1ATrack.cpp").read_text()),
+        )
+        write_file(
+            new / "src/mxf_op1a/CMakeLists.txt",
+            patch_op1a_src_cmake((old / "src/mxf_op1a/CMakeLists.txt").read_text()),
+        )
+        write_file(
+            new / "include/bmx/mxf_op1a/CMakeLists.txt",
+            patch_op1a_hdr_cmake((old / "include/bmx/mxf_op1a/CMakeLists.txt").read_text()),
+        )
+        write_file(new / "include/bmx/mxf_op1a/OP1AOpaqueTrack.h", OPAQUE_TRACK_H)
+        write_file(new / "src/mxf_op1a/OP1AOpaqueTrack.cpp", OPAQUE_TRACK_CPP)
+
+        p1 = "".join(
+            [
+                run_diff(
+                    old / "include/bmx/EssenceType.h",
+                    new / "include/bmx/EssenceType.h",
+                    "include/bmx/EssenceType.h",
+                ),
+                run_diff(
+                    old / "src/common/EssenceType.cpp",
+                    new / "src/common/EssenceType.cpp",
+                    "src/common/EssenceType.cpp",
+                ),
+            ]
+        )
+        p2 = "".join(
+            [
+                run_diff(
+                    old / "src/mxf_helper/MXFDescriptorHelper.cpp",
+                    new / "src/mxf_helper/MXFDescriptorHelper.cpp",
+                    "src/mxf_helper/MXFDescriptorHelper.cpp",
+                ),
+                run_diff(
+                    old / "src/mxf_helper/CMakeLists.txt",
+                    new / "src/mxf_helper/CMakeLists.txt",
+                    "src/mxf_helper/CMakeLists.txt",
+                ),
+                run_diff(
+                    old / "include/bmx/mxf_helper/CMakeLists.txt",
+                    new / "include/bmx/mxf_helper/CMakeLists.txt",
+                    "include/bmx/mxf_helper/CMakeLists.txt",
+                ),
+                run_diff(
+                    Path("/dev/null"),
+                    new / "include/bmx/mxf_helper/OpaqueMXFDescriptorHelper.h",
+                    "include/bmx/mxf_helper/OpaqueMXFDescriptorHelper.h",
+                ),
+                run_diff(
+                    Path("/dev/null"),
+                    new / "src/mxf_helper/OpaqueMXFDescriptorHelper.cpp",
+                    "src/mxf_helper/OpaqueMXFDescriptorHelper.cpp",
+                ),
+            ]
+        )
+        p3 = "".join(
+            [
+                run_diff(
+                    old / "src/mxf_op1a/OP1ATrack.cpp",
+                    new / "src/mxf_op1a/OP1ATrack.cpp",
+                    "src/mxf_op1a/OP1ATrack.cpp",
+                ),
+                run_diff(
+                    old / "src/mxf_op1a/CMakeLists.txt",
+                    new / "src/mxf_op1a/CMakeLists.txt",
+                    "src/mxf_op1a/CMakeLists.txt",
+                ),
+                run_diff(
+                    old / "include/bmx/mxf_op1a/CMakeLists.txt",
+                    new / "include/bmx/mxf_op1a/CMakeLists.txt",
+                    "include/bmx/mxf_op1a/CMakeLists.txt",
+                ),
+                run_diff(
+                    Path("/dev/null"),
+                    new / "include/bmx/mxf_op1a/OP1AOpaqueTrack.h",
+                    "include/bmx/mxf_op1a/OP1AOpaqueTrack.h",
+                ),
+                run_diff(
+                    Path("/dev/null"),
+                    new / "src/mxf_op1a/OP1AOpaqueTrack.cpp",
+                    "src/mxf_op1a/OP1AOpaqueTrack.cpp",
+                ),
+            ]
+        )
+
+        (PATCHES / "0001-opaque-essence-type.patch").write_text(p1)
+        (PATCHES / "0002-opaque-descriptor-helper.patch").write_text(p2)
+        (PATCHES / "0003-op1a-opaque-track.patch").write_text(p3)
+        print("wrote", PATCHES)
+
+
+if __name__ == "__main__":
+    main()
