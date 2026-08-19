@@ -28,6 +28,7 @@
     "binding.js",
     "binding.d.ts",
     "mxfuse.*.node",
+    "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md"
   ],

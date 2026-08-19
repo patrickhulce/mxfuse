@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copy LICENSE and third-party notices into each published package directory.
+# Copy LICENSE, notices, and the npm README into each published package directory.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -12,3 +12,5 @@ dests=(
 for dest in "${dests[@]}"; do
   cp "$root/LICENSE" "$root/THIRD_PARTY_NOTICES.md" "$dest/"
 done
+# npm only packs files inside the package directory.
+cp "$root/README.md" "$root/src/node-mxfuse/README.md"
