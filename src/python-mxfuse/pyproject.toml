@@ -1,7 +1,33 @@
 [project]
 name = "mxfuse"
 version = "0.1.0"
+description = "Read and write MXF files through a statically linked bmx core"
+readme = "../../README.md"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+authors = [{ name = "mxfuse contributors" }]
+keywords = ["mxf", "bmx", "media", "container"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Multimedia :: Video",
+]
+
+[project.urls]
+Homepage = "https://github.com/patrickhulce/mxfuse"
+Repository = "https://github.com/patrickhulce/mxfuse"
+Issues = "https://github.com/patrickhulce/mxfuse/issues"
 
 [build-system]
 requires = ["maturin>=1.7,<2.0"]
@@ -12,6 +38,7 @@ features = ["pyo3/extension-module", "pyo3/abi3-py310"]
 module-name = "mxfuse._mxfuse"
 python-source = "."
 manifest-path = "Cargo.toml"
+include = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 
 [dependency-groups]
 dev = [

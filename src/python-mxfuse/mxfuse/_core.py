@@ -15,7 +15,11 @@ from mxfuse._mxfuse import write_mxf as _write_mxf
 
 @runtime_checkable
 class BinarySource(Protocol):
-    """Minimal open-like readable handle accepted by :func:`open_mxf`."""
+    """Minimal open-like readable handle accepted by :func:`open_mxf`.
+
+    ``size()`` is optional. Regular files omit it; size is inferred via
+    ``seek(0, 2)``.
+    """
 
     def read(self, size: int = -1, /) -> bytes: ...
 
