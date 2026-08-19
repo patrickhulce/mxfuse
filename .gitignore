@@ -5,7 +5,14 @@ src/python-mxfuse/.venv/
 *.so
 *.pyc
 dist/
-src/node-mxfuse/binding.js
-src/node-mxfuse/binding.d.ts
-src/node-mxfuse/npm/**/*.node
+src/mxfuse-sys/generated/
+src/mxfuse-sys/LICENSE
+src/mxfuse-sys/THIRD_PARTY_NOTICES.md
+src/rust-mxfuse/LICENSE
+src/rust-mxfuse/THIRD_PARTY_NOTICES.md
+src/python-mxfuse/LICENSE
+src/python-mxfuse/THIRD_PARTY_NOTICES.md
+src/node-mxfuse/LICENSE
+src/node-mxfuse/THIRD_PARTY_NOTICES.md
+.data/
 .DS_Store
