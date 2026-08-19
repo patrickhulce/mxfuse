@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# napi artifacts only warns when a target binary is missing. Fail the release
-# if any configured platform package is empty.
+# Fail the release if any configured napi triple is missing from the main package.
 set -euo pipefail
-
 root="$(cd "$(dirname "$0")/.." && pwd)"
-npm_dir="$root/src/node-mxfuse/npm"
+pkg="$root/src/node-mxfuse"
 missing=0
 
-if [[ ! -d "$npm_dir" ]]; then
-  echo "missing $npm_dir; run napi create-npm-dirs first" >&2
-  exit 1
-fi
+triples=(
+  darwin-arm64
+  darwin-x64
+  linux-x64-gnu
+  linux-arm64-gnu
+  win32-x64-msvc
+)
 
-for dir in "$npm_dir"/*; do
-  [[ -d "$dir" ]] || continue
-  if ! find "$dir" -name '*.node' | grep -q .; then
-    echo "missing .node binary in $dir" >&2
+for triple in "${triples[@]}"; do
+  if [[ ! -f "$pkg/mxfuse.${triple}.node" ]]; then
+    echo "missing $pkg/mxfuse.${triple}.node" >&2
     missing=1
   fi
 done

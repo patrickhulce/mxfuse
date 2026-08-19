@@ -1,4 +1,4 @@
-.PHONY: all build lint typecheck test fixtures profile bench examples \
+.PHONY: all build lint typecheck test fixtures profile bench examples package \
         build-rust build-python build-node \
         lint-rust lint-python lint-node \
         typecheck-python typecheck-node \
@@ -12,6 +12,7 @@ build-rust:
 	cargo build --workspace --exclude mxfuse_python_bindings
 
 build-python:
+	./scripts/sync-package-licenses.sh
 	cd src/python-mxfuse && uv sync && uv run maturin develop --uv
 
 build-node:
@@ -64,3 +65,8 @@ bench:
 
 examples: build-python
 	uv run --project src/python-mxfuse --with imagecodecs python examples/jxl.py
+
+package: build-rust
+	chmod +x scripts/sync-package-licenses.sh scripts/check-crate-package.sh
+	./scripts/sync-package-licenses.sh
+	./scripts/check-crate-package.sh
