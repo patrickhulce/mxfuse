@@ -28,12 +28,22 @@ jobs:
           chmod +x scripts/generate-fixture.sh
           ./scripts/generate-fixture.sh
       - run: make lint-rust test-rust
+      - name: Check crate package
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x scripts/sync-package-licenses.sh scripts/check-crate-package.sh
+          ./scripts/sync-package-licenses.sh
+          ./scripts/check-crate-package.sh
 
   python:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-latest, windows-latest]
+        python-version: ["3.12"]
+        include:
+          - os: ubuntu-24.04
+            python-version: "3.10"
     runs-on: ${{ matrix.os }}
     env:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
@@ -42,10 +52,15 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - uses: Swatinem/rust-cache@v2
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ pkg-config
       - name: Generate fixture
         run: ./scripts/generate-fixture.sh
+        shell: bash
+      - run: chmod +x scripts/sync-package-licenses.sh && ./scripts/sync-package-licenses.sh
         shell: bash
       - run: make build-python lint-python typecheck-python test-python
 
@@ -67,6 +82,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - uses: Swatinem/rust-cache@v2
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ pkg-config
       - run: pnpm install
       - name: Generate fixture
         run: ./scripts/generate-fixture.sh
