@@ -5,24 +5,23 @@ use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Top-level vendor directories that are not needed to compile the libraries.
+const SKIP_VENDOR_DIRS: &[&str] = &["apps", "tools", "meta"];
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let vendor_bmx = dunce::canonicalize(manifest_dir.join("../../vendor/bmx"))
-        .expect("vendor/bmx is missing; see vendor/README.md");
+    let generated = manifest_dir.join("generated/bmx");
+    let git_vendor = manifest_dir.join("../../vendor/bmx");
     let patches_dir = manifest_dir.join("../../patches");
 
     println!("cargo:rerun-if-changed=shim/mxfuse_shim.cpp");
     println!("cargo:rerun-if-changed=shim/mxfuse_shim.h");
     println!("cargo:rerun-if-changed=shim/uuid_stub.c");
     println!("cargo:rerun-if-changed=shim/uuid/uuid.h");
-    println!(
-        "cargo:rerun-if-changed={}",
-        vendor_bmx.join("CMakeLists.txt").display()
-    );
-    println!("cargo:rerun-if-changed={}", patches_dir.display());
 
-    let bmx_src = prepare_patched_source(&vendor_bmx, &patches_dir, &out_dir);
+    let bmx_src = resolve_bmx_source(&generated, &git_vendor, &patches_dir);
+    stage_license_files(&manifest_dir);
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let stub_lib = build_uuid_stub(&out_dir);
@@ -81,9 +80,26 @@ fn main() {
     compile_shim(&manifest_dir, &bmx_src, &target_os);
 }
 
-fn prepare_patched_source(vendor_bmx: &Path, patches_dir: &Path, out_dir: &Path) -> PathBuf {
-    let dest = out_dir.join("bmx-src");
-    let stamp_path = out_dir.join("bmx-src.stamp");
+fn resolve_bmx_source(generated: &Path, git_vendor: &Path, patches_dir: &Path) -> PathBuf {
+    if git_vendor.is_dir() {
+        println!(
+            "cargo:rerun-if-changed={}",
+            git_vendor.join("CMakeLists.txt").display()
+        );
+        println!("cargo:rerun-if-changed={}", patches_dir.display());
+        prepare_patched_source(git_vendor, patches_dir, generated);
+        return generated.to_path_buf();
+    }
+    if generated.is_dir() {
+        return generated.to_path_buf();
+    }
+    panic!(
+        "mxfuse-sys needs generated/bmx (published crate) or ../../vendor/bmx (git checkout); see vendor/README.md"
+    );
+}
+
+fn prepare_patched_source(vendor_bmx: &Path, patches_dir: &Path, dest: &Path) {
+    let stamp_path = dest.parent().unwrap_or(dest).join("bmx.stamp");
     let stamp = source_stamp(vendor_bmx, patches_dir);
 
     if dest.is_dir()
@@ -91,16 +107,18 @@ fn prepare_patched_source(vendor_bmx: &Path, patches_dir: &Path, out_dir: &Path)
             .ok()
             .is_some_and(|existing| existing == stamp)
     {
-        return dest;
+        return;
     }
 
     if dest.exists() {
-        fs::remove_dir_all(&dest).expect("failed to clear previous patched bmx tree");
+        fs::remove_dir_all(dest).expect("failed to clear previous patched bmx tree");
     }
-    copy_dir(vendor_bmx, &dest).expect("failed to copy vendor/bmx into OUT_DIR");
-    apply_patches(&dest, patches_dir);
+    copy_dir(vendor_bmx, dest, true).expect("failed to copy vendor/bmx into generated/bmx");
+    apply_patches(dest, patches_dir);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).expect("failed to create generated/");
+    }
     fs::write(&stamp_path, stamp).expect("failed to write bmx patch stamp");
-    dest
 }
 
 fn source_stamp(vendor_bmx: &Path, patches_dir: &Path) -> String {
@@ -205,19 +223,37 @@ fn plus_path(line: &str) -> Result<String, String> {
     Ok(trimmed.replace('\\', "/"))
 }
 
-fn copy_dir(src: &Path, dst: &Path) -> io::Result<()> {
+fn copy_dir(src: &Path, dst: &Path, skip_root_junk: bool) -> io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
+        let name = entry.file_name();
+        if skip_root_junk
+            && SKIP_VENDOR_DIRS
+                .iter()
+                .any(|skip| name.as_os_str() == *skip)
+        {
+            continue;
+        }
         let from = entry.path();
-        let to = dst.join(entry.file_name());
+        let to = dst.join(&name);
         if entry.file_type()?.is_dir() {
-            copy_dir(&from, &to)?;
+            copy_dir(&from, &to, false)?;
         } else {
             fs::copy(&from, &to)?;
         }
     }
     Ok(())
+}
+
+fn stage_license_files(manifest_dir: &Path) {
+    let root = manifest_dir.join("../..");
+    for name in ["LICENSE", "THIRD_PARTY_NOTICES.md"] {
+        let src = root.join(name);
+        if src.is_file() {
+            let _ = fs::copy(&src, manifest_dir.join(name));
+        }
+    }
 }
 
 fn build_uuid_stub(out_dir: &Path) -> PathBuf {

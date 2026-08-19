@@ -6,9 +6,11 @@ to keep the tree small. `deps/libMXF`, `deps/libMXFpp`, `deps/libexpat`,
 `deps/uriparser`, and `deps/cmake-git-version-tracking` are included so a
 configure is offline and needs no `git`.
 
-Do not treat this as a git submodule. The files are ordinary tracked source so
-`cargo package` can include them.
+Do not treat this as a git submodule. The tree stays pristine. Do not edit
+files under `vendor/bmx` to add mxfuse behavior.
 
-The tree stays pristine. `src/mxfuse-sys/build.rs` copies it into `$OUT_DIR`
-and applies the unified diffs under `patches/` (opaque essence type) before
-cmake runs. Do not edit files under `vendor/bmx` to add mxfuse behavior.
+`src/mxfuse-sys/build.rs` copies this tree (minus `apps`, `tools`, and `meta`),
+applies `patches/` (opaque essence type), and writes the result to the
+gitignored `src/mxfuse-sys/generated/bmx` directory. cmake and the shim compile
+that generated tree. `cargo package` ships `generated/` via the crate `include`
+list so a crates.io source build does not need this directory.
