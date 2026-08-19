@@ -1,14 +1,35 @@
 {
   "name": "mxfuse",
   "version": "0.1.0",
-  "description": "Node.js bindings for mxfuse",
+  "description": "Read and write MXF files through a statically linked bmx core",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "license": "MIT",
+  "author": "mxfuse contributors",
+  "homepage": "https://github.com/patrickhulce/mxfuse",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/patrickhulce/mxfuse.git"
+  },
+  "bugs": {
+    "url": "https://github.com/patrickhulce/mxfuse/issues"
+  },
+  "keywords": [
+    "mxf",
+    "bmx",
+    "media",
+    "container"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "files": [
     "dist",
     "binding.js",
-    "binding.d.ts"
+    "binding.d.ts",
+    "mxfuse.*.node",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "build:native": "napi build --cargo-name mxfuse_node_bindings --platform --release --js binding.js --dts binding.d.ts",
@@ -21,7 +42,7 @@
     "format": "prettier --write .",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "artifacts:check": "../../scripts/check-napi-artifacts.sh",
-    "prepublishOnly": "napi prepublish -t npm && pnpm run artifacts:check"
+    "prepublishOnly": "bash ../../scripts/sync-package-licenses.sh && pnpm run artifacts:check"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
