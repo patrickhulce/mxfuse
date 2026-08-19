@@ -3,12 +3,28 @@ name = "mxfuse"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 description = "Read and write MXF files through a statically linked bmx core"
 readme = "../../README.md"
-exclude = ["../../vendor/bmx/apps", "../../vendor/bmx/tools", "../../vendor/bmx/meta"]
+keywords = ["mxf", "bmx", "media", "container"]
+categories = ["multimedia", "encoding"]
+rust-version = "1.87"
+include = [
+    "src/**",
+    "examples/**",
+    "build.rs",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+]
 
 [lib]
 crate-type = ["rlib"]
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
 mxfuse-sys = { path = "../mxfuse-sys", version = "0.1.0" }
