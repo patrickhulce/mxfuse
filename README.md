@@ -11,7 +11,6 @@ trip. Pin product info, creation date, generation UID, and package
 UMIDs on write. The core is synchronous: one reader or writer per thread.
 
 ```bash
-cargo add mxfuse
 npm i mxfuse
 uv add mxfuse
 ```
@@ -19,10 +18,36 @@ uv add mxfuse
 Wheels and napi prebuilds are the supported install path. They statically link
 bmx, libMXF, libMXF++, expat, and uriparser. On Linux the C++ runtime
 (`libstdc++.so.6`, `libgcc_s.so.1`) stays dynamic; both are on the manylinux
-allowlist. `cargo add mxfuse` is a source build and needs CMake plus a C++
-toolchain. uriparser, expat, and `cmake-git-version-tracking` are pre-vendored,
-and libuuid is replaced by a shim-provided `uuid_generate`, so a source build
-does not need `git`, network access at configure time, or `uuid-dev`.
+allowlist. The Rust crate is not on crates.io yet; use a git dependency
+(`cargo add --git https://github.com/patrickhulce/mxfuse mxfuse`). That is a
+source build and needs CMake plus a C++ toolchain. uriparser, expat, and
+`cmake-git-version-tracking` are pre-vendored, and libuuid is replaced by a
+shim-provided `uuid_generate`, so a source build does not need `git` at
+configure time, network access, or `uuid-dev`.
+
+v0.1.0 is an `0.x` release: the API may change. Prebuilt artifacts cover
+linux x64/arm64 (glibc), macOS x64/arm64, and Windows x64. musl, Windows
+arm64, and other triples are source-build only.
+
+## Limitations
+
+- **OP1a, frame-wrapped only** for v1. No AS-02, IMF flavour, RDD 9, D-10,
+  Avid OP-Atom, or clip wrapping as a write target.
+- **No sub-descriptors.** A private mapping that needs a registered
+  sub-descriptor set (JPEG 2000, JPEG XS, or a future
+  `JXLPictureSubDescriptor`) cannot write or read those items yet.
+- **Display and sampled geometry follow stored width/height** on write.
+- **Essence in, essence out.** A frame is the KLV payload with the key and
+  length stripped. No image codec decode or encode.
+- **Synchronous core.** One reader or writer per thread.
+- **`Flavour.SINGLE_PASS`** needs a known duration and a constant-bytes-per-element
+  codec. Python and Rust can write that flavour to a pipe; Node `writeMxf`
+  accepts a filesystem path only.
+- **`WAVE_PCM` is pinned to 48 kHz** in OP1a.
+- **Node custom `ByteSource` loads the whole file.** Path and buffer opens
+  use native range I/O. Remote / S3 range reads are a Python and Rust feature.
+- **bmx and libMXF are BSD-3-Clause.** `mxfuse` is MIT; the combined binary
+  carries both. See `THIRD_PARTY_NOTICES.md`.
 
 ## Usage
 
@@ -129,7 +154,8 @@ for (const package_ of await clip.read(1)) {
 await clip.close();
 ```
 
-Do not share one reader across concurrent tasks.
+Do not share one reader across concurrent tasks. `openMxf` on a custom
+`ByteSource` (not a path or `Uint8Array`) reads the entire file into memory.
 
 ```typescript
 import { EssenceType, Flavour, writeMxf } from "mxfuse";
@@ -221,8 +247,8 @@ src/
 ├── rust-mxfuse/     # Core Rust library
 ├── python-mxfuse/   # PyO3 extension and Python API
 └── node-mxfuse/     # napi-rs extension and TypeScript API
-vendor/bmx/          # ebu/bmx v1.7 source release (offline)
-patches/             # applied to an OUT_DIR copy of vendor/bmx at build time
+vendor/bmx/          # ebu/bmx v1.7 source release (offline, pristine)
+patches/             # applied into gitignored src/mxfuse-sys/generated/bmx
 ```
 
 ### Commands
@@ -234,4 +260,5 @@ make test         # run all tests
 make fixtures     # generate tests/fixtures/sample_op1a.mxf
 make bench        # print read/byte costs across ReadOptions
 make examples     # JPEG XL Generic Container round-trip (needs .data/4KProRes.mov)
+make package      # materialize generated/bmx and list crate contents
 ```
