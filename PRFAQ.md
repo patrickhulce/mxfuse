@@ -20,15 +20,15 @@ With `mxfuse`, you can stream a well-formed OP1a file to ffplay in a single pass
 - **Single-pass streamable write** (`Flavour.SINGLE_PASS`) requires a known duration, a constant-bytes-per-element codec, partition interval 0, and no timed text. JPEG 2000 and ProRes are typically variable-frame-size and will not produce a closed-complete header in one pass.
 - **`WAVE_PCM` is pinned to 48 kHz** in OP1a.
 - **Clip-wrapped essence without a complete index table** needs a constant edit unit size that bmx already recognizes (DV, uncompressed, VC-3, WAVE PCM). Unknown codecs in that configuration will not read.
-- **`cargo add mxfuse` needs CMake and a C++ toolchain.** Wheels and napi prebuilds are the supported path and statically link the bmx stack (bmx, libMXF, libMXF++, expat, uriparser). On Linux the C++ runtime stays dynamic — `libstdc++.so.6` and `libgcc_s.so.1` are on the manylinux allowlist. A source build does not need `git`, network access at configure time, or `uuid-dev`: those dependencies are vendored or replaced by a shim-provided `uuid_generate`.
+- **Node is path/buffer for v1.** `writeMxf` writes a filesystem path. A custom `ByteSource` passed to `openMxf` is slurped into memory. Range-capable remote sources and `Flavour.SINGLE_PASS` pipes are Python and Rust.
+- **The Rust crate is not on crates.io yet.** Use a git dependency (`cargo add --git https://github.com/patrickhulce/mxfuse mxfuse`). That source build needs CMake and a C++ toolchain. Wheels and napi prebuilds are the supported path and statically link the bmx stack (bmx, libMXF, libMXF++, expat, uriparser). On Linux the C++ runtime stays dynamic — `libstdc++.so.6` and `libgcc_s.so.1` are on the manylinux allowlist. A source build does not need `git` at configure time, network access, or `uuid-dev`: those dependencies are vendored or replaced by a shim-provided `uuid_generate`. `build.rs` materializes a patch-applied tree in `src/mxfuse-sys/generated/bmx` that `cargo package` can ship later.
 - **bmx and libMXF are BSD-3-Clause.** `mxfuse` is MIT; the combined binary carries both.
 
 ## Usage
 
-Getting started is easy. `mxfuse` is a single package available via the cargo, npm, and pypi package registries.
+Getting started is easy. `mxfuse` is on npm and PyPI. The Rust crate is a git dependency until it is published to crates.io.
 
 ```bash
-cargo add mxfuse
 npm i mxfuse
 uv add mxfuse
 ```
@@ -83,8 +83,8 @@ spec = ClipSpec(
 
 with open("output.mxf", "wb") as f, write_mxf(f, spec) as clip:
     for image, audio in zip(images, audios):
-        clip.write(0, image)
-        clip.write(1, audio)
+        clip.write_unit(image, audio)
+        # equivalent: clip.write(0, image); clip.write(1, audio)
 ```
 
 `Flavour.SINGLE_PASS` writes a closed-complete header up front and never seeks backward, so the destination can be a pipe or any other non-seekable sink. Write fewer or more samples than `duration` and `CompleteWrite` fails. Omit the flavour (or pick a variable-frame-size codec) and the writer will seek back to finish the header — fine for a regular file, fatal for a pipe.
@@ -133,38 +133,12 @@ spec = ClipSpec(
 
 with open("output.mxf", "wb") as f, write_mxf(f, spec) as clip:
     for image in images:
-        clip.write(0, image)
+        clip.write_unit(image)
 ```
 
 You do not fork bmx. The opaque type lives in `mxfuse`'s tracked patch set; prebuilt artifacts already include it. On read, `track.coding_ul` and the picture descriptor identify the mapping — a JPEG XL clip is no longer indistinguishable from any other opaque picture.
 
-#### 1:1 bmx surface
-
-`mxfuse.bmx` is a thin binding over the real C++ classes — not the `mxf2raw` / `raw2bmx` command-line apps, and not a fictional `BMXMetadata` type. Use it when the high-level `open_mxf` / `write_mxf` façade hides a knob you need (`SetReadLimits`, `GetHeaderMetadata`, flavour flags, descriptor mutation between `PrepareHeaderMetadata` and `PrepareWrite`).
-
-```python
-from mxfuse.bmx import MXFFileReader, ClipWriter, EssenceType, HeaderMetadata
-
-reader = MXFFileReader.open(path)
-print(reader.edit_rate, reader.duration, reader.num_track_readers)
-reader.set_read_limits()
-reader.seek(0)
-while True:
-    n = reader.read(1)
-    if n == 0:
-        break
-    track = reader.track_reader(0)
-    frame = track.frame_buffer.last_frame(pop=True)
-    if frame is not None and not frame.is_empty:
-        consume(frame.bytes, frame.size)
-
-writer = ClipWriter.open_new_op1a(flavour=0, file=out, frame_rate=(24, 1))
-writer.create_track(EssenceType.UNC_HD_1080P)
-writer.create_track(EssenceType.WAVE_PCM)
-writer.prepare_write()
-# ... WriteSamples per track, then CompleteWrite
-header: HeaderMetadata = writer.header_metadata
-```
+`write_unit(*payloads)` writes one edit unit across tracks in index order. `write(track_index, data)` writes a single track. Both exist; Node and Rust expose only the per-track `write`.
 
 ## FAQ
 
@@ -174,7 +148,7 @@ bmx exists to produce and consume specification-compliant MXF, including IMF ess
 
 ### How does a remote or S3 source work?
 
-libMXF's `MXFFile` is a C vtable of eleven function pointers (`close`, `read`, `write`, `get_char`, `put_char`, `eof`, `seek`, `tell`, `is_seekable`, `size`, `free_sys_data`). An S3 range-reader (or any other byte source) implements the read-side slots and plugs in directly, and bmx's index-driven reader seeks to the requested edit unit instead of scanning from the top. `open_mxf` wraps your handle in that vtable and hands it to `MXFFileReader::Open`.
+libMXF's `MXFFile` is a C vtable of eleven function pointers (`close`, `read`, `write`, `get_char`, `put_char`, `eof`, `seek`, `tell`, `is_seekable`, `size`, `free_sys_data`). An S3 range-reader (or any other byte source) implements the read-side slots and plugs in directly, and bmx's index-driven reader seeks to the requested edit unit instead of scanning from the top. Python and Rust `open_mxf` wrap your handle in that vtable. Node `openMxf` does this for a filesystem path or an in-memory buffer; a custom `ByteSource` is read in full first.
 
 ### How do private codecs work if bmx has a closed catalogue?
 
@@ -182,7 +156,7 @@ Reading unknown essence already works unpatched — bmx degrades it to generic p
 
 ### How is the vendored patch set kept current?
 
-`vendor/bmx` is a materialized ebu/bmx v1.7 tree (not a git submodule), so `cargo package` can include it and a source build does not need `git`. `build.rs` copies that tree into `$OUT_DIR` and applies `patches/*.patch` with the `diffy` crate — enum value, descriptor helper, OP1a track class, factory switch, CMake. CI applies the same patches to a pristine copy and fails if any patch rejects. The intent is to upstream the opaque type to `ebu/bmx` and then delete the patch.
+`vendor/bmx` is a materialized ebu/bmx v1.7 tree (not a git submodule). `build.rs` copies that tree (minus apps/tools/meta), applies `patches/*.patch` with the `diffy` crate, and writes the result to gitignored `src/mxfuse-sys/generated/bmx`. cmake uses that tree. `cargo package` ships `generated/` so a crates.io source build does not need the repo-root vendor directory or `git`. CI applies the same patches to a pristine copy and fails if any patch rejects. The intent is to upstream the opaque type to `ebu/bmx` and then delete the patch.
 
 ### What does "async" actually mean if the core is synchronous?
 
@@ -194,12 +168,12 @@ No. Essence goes in and essence comes out. bmx has bitstream parsers, not image 
 
 ### How is `BMXException` kept from unwinding across FFI?
 
-`Open()` returns an error code. Almost everything else (`Read`, `Seek`, `SetReadLimits`, `WriteSamples`, `CompleteWrite`) throws `BMXException`. Unwinding across the Rust/C++ boundary is undefined behavior. Every shim entry point is wrapped in `try`/`catch(...)` and converted to a Rust `Error` (and from there to `NotImplementedError` / a JS exception / a Rust `Result`). There is no `extern "C"` surface in bmx, so the shim is hand-written C++ compiled with `cc`/`cxx`, not `bindgen`.
+`Open()` returns an error code. Almost everything else (`Read`, `Seek`, `SetReadLimits`, `WriteSamples`, `CompleteWrite`) throws `BMXException`. Unwinding across the Rust/C++ boundary is undefined behavior. Every shim entry point is wrapped in `try`/`catch(...)` and converted to a Rust `Error` (and from there to `RuntimeError` / a JS exception / a Rust `Result`). There is no `extern "C"` surface in bmx, so the shim is hand-written C++ compiled with `cc`/`cxx`, not `bindgen`.
 
 ### Why does file ownership matter for a custom byte source?
 
-`MXFFileReader` and `OP1AFile` take ownership of the `mxfpp::File*` you pass in and `delete` it in the destructor, which closes the underlying `MXFFile` and calls your `close` / `free_sys_data`. The high-level `open_mxf` / `write_mxf` API hides this: the Python/Node/Rust handle stays alive for the lifetime of the clip, and dropping the clip is what closes the source. If you use `mxfuse.bmx` directly, do not also close or free the file you handed over.
+`MXFFileReader` and `OP1AFile` take ownership of the `mxfpp::File*` you pass in and `delete` it in the destructor, which closes the underlying `MXFFile` and calls your `close` / `free_sys_data`. The high-level `open_mxf` / `write_mxf` API hides this: the Python/Node/Rust handle stays alive for the lifetime of the clip, and dropping the clip is what closes the source.
 
 ### What is the performance story for a 500 GB remote file?
 
-bmx is index-driven. Seeking to an edit unit and reading it touches the header, the index, and the essence KLV for the selected tracks — not the rest of the file. `make bench` (Apple M5 Max) on a 61 MB synthetic OP1a of 8,000 edit units sought the last picture frame in 41,007 reads totaling 127 KB with both knobs off, and in 3 reads totaling 1.2 MB (2% of the file) with the default 1 MB `read_ahead` and 64 MB `cache_bytes`. The same access on a 4×-smaller clip fetched 1.13× fewer bytes, so cost is not proportional to file size. The 41,007 tiny reads are what a remote source has to amortize. Disable unneeded tracks *before* `read`. A 1 MB read-ahead window will pull neighbouring interleaved sound bytes; deselected *payloads* are still never demanded, and the isolation proof runs with both knobs at 0. With those knobs, a single frame of a 500 GB IMF is a handful of range requests totaling a few MB.
+bmx is index-driven. Seeking to an edit unit and reading it touches the header, the index, and the essence KLV for the selected tracks — not the rest of the file. `make bench` (Apple M5 Max) on a 61 MB synthetic OP1a of 8,000 edit units sought the last picture frame in 41,007 reads totaling 127 KB with both knobs off, and in 3 reads totaling 1.2 MB (2% of the file) with the default 1 MB `read_ahead` and 64 MB `cache_bytes`. The same access on a 4×-smaller clip fetched 1.13× fewer bytes, so cost is not proportional to file size. The 41,007 tiny reads are what a remote source has to amortize. Disable unneeded tracks *before* `read`. A 1 MB read-ahead window will pull neighbouring interleaved sound bytes; deselected *payloads* are still never demanded, and the isolation proof runs with both knobs at 0. With those knobs, a single frame of a 500 GB IMF is a handful of range requests totaling a few MB. That path is Python and Rust; Node needs a path or a buffer already on disk.
