@@ -134,7 +134,10 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm >= 11.5.1 (Node 22 ships 10.x). Do not set
+      # registry-url / NODE_AUTH_TOKEN: setup-node would write an .npmrc that
+      # requires a token and OIDC auth never runs.
+      - run: npm install -g npm@11
       - run: pnpm install
       - uses: actions/download-artifact@v8
         with:
@@ -160,9 +163,7 @@ jobs:
       - name: Publish npm package
         if: startsWith(github.ref, 'refs/tags/v')
         working-directory: src/node-mxfuse
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
+        run: npm publish --access public
 
   pypi:
     needs: [python-wheels, python-sdist]
@@ -190,6 +191,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: upload
+          skip-existing: true
 
   github-release:
     if: startsWith(github.ref, 'refs/tags/v')
