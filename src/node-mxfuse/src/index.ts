@@ -12,7 +12,11 @@ import {
 
 export type TrackKind = "picture" | "sound" | "data" | "other";
 
-/** An open-like source. Path strings and in-memory buffers are opened natively. */
+/**
+ * An open-like source. Path strings and in-memory buffers are opened natively
+ * with range-capable I/O. A custom `ByteSource` is read into memory in one
+ * pass — use a path when the file is large or remote.
+ */
 export interface ByteSource {
   read(size?: number): Promise<Uint8Array> | Uint8Array;
   seek(offset: number, whence?: number): Promise<number> | number;
@@ -422,6 +426,7 @@ export class ClipWriter {
   }
 }
 
+/** Open a path or buffer with native range I/O. A custom source is slurped. */
 export async function openMxf(
   source: string | Uint8Array | ByteSource,
   options: ReadOptions = {},
@@ -450,6 +455,7 @@ export async function openMxfFile(
   return openMxf(path, options);
 }
 
+/** Write an OP1a file to a filesystem path. Pipes and custom sinks are not supported. */
 export async function writeMxf(
   dest: string,
   spec: ClipSpec,

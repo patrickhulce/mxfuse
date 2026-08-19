@@ -1,0 +1,9 @@
+# `.gitignore` is not used when this file exists. Keep native addons packable.
+src
+test
+tsconfig.json
+tsconfig.test.json
+eslint.config.mjs
+.prettierignore
+Cargo.toml
+build.rs
