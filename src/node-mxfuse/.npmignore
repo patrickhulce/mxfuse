@@ -1,6 +1,7 @@
 # `.gitignore` is not used when this file exists. Keep native addons packable.
 src
 test
+target
 tsconfig.json
 tsconfig.test.json
 eslint.config.mjs

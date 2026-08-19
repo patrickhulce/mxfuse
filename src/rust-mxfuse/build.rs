@@ -8,7 +8,9 @@ fn main() {
     for name in ["LICENSE", "THIRD_PARTY_NOTICES.md"] {
         let src = root.join(name);
         if src.is_file() {
-            let _ = fs::copy(&src, manifest_dir.join(name));
+            fs::copy(&src, manifest_dir.join(name)).unwrap_or_else(|err| {
+                panic!("failed to copy {} into mxfuse: {err}", src.display());
+            });
         }
     }
 }

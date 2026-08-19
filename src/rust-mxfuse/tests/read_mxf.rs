@@ -13,6 +13,7 @@ fn fixture_path() -> Option<PathBuf> {
 #[test]
 fn open_lists_tracks_and_reads_a_frame() {
     let Some(path) = fixture_path() else {
+        eprintln!("skipping: missing tests/fixtures/sample_op1a.mxf; run make fixtures");
         return;
     };
     let file = File::open(path).unwrap();
@@ -37,6 +38,7 @@ fn open_lists_tracks_and_reads_a_frame() {
 #[test]
 fn read_ahead_amortizes_small_reads() {
     let Some(path) = fixture_path() else {
+        eprintln!("skipping: missing tests/fixtures/sample_op1a.mxf; run make fixtures");
         return;
     };
     let bytes = std::fs::read(path).unwrap();

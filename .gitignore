@@ -14,5 +14,6 @@ src/python-mxfuse/LICENSE
 src/python-mxfuse/THIRD_PARTY_NOTICES.md
 src/node-mxfuse/LICENSE
 src/node-mxfuse/THIRD_PARTY_NOTICES.md
+src/node-mxfuse/README.md
 .data/
 .DS_Store
