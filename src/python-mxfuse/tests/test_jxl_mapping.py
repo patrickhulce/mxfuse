@@ -71,6 +71,7 @@ def test_jxl_mapping_matches_reference_profile() -> None:
                 data=XML,
                 language="en",
                 namespace="http://jxlmxf/exr-meta/1",
+                scheme_id="urn:x-jxlmxf:exr-header-metadata:1",
             )
         ],
     )

@@ -2,7 +2,7 @@ use std::io::{self, SeekFrom};
 
 use mxfuse::{
     ByteSink, ByteSource, ClipSpec, DescriptorKind, EssenceType, Flavour, Identity, PixelComponent,
-    Rational, ReadOptions, Timecode, TrackKind, TrackSpec, XmlMetadata,
+    Rational, ReadOptions, TextEncoding, Timecode, TrackKind, TrackSpec, XmlMetadata, XmlScheme,
 };
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -198,11 +198,15 @@ impl PyClip {
             .iter()
             .map(|item| PyXmlMetadata {
                 data: item.data.clone(),
-                scheme_id: item.scheme_id.map(|ul| ul.to_vec()).unwrap_or_default(),
+                scheme_id: match &item.scheme_id {
+                    Some(XmlScheme::Ul(ul)) => ul.to_vec(),
+                    _ => Vec::new(),
+                },
                 language: item.language.clone().unwrap_or_default(),
                 namespace: item.namespace.clone().unwrap_or_default(),
                 mime_type: item.mime_type.clone().unwrap_or_default(),
                 is_xml: item.is_xml,
+                text_encoding: item.text_encoding.as_i32(),
             })
             .collect())
     }
@@ -331,6 +335,8 @@ struct PyXmlMetadata {
     mime_type: String,
     #[pyo3(get)]
     is_xml: bool,
+    #[pyo3(get)]
+    text_encoding: i32,
 }
 
 #[pyclass(name = "Package")]
@@ -644,7 +650,8 @@ fn xml_list_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Vec<XmlMetadata>> {
 fn xml_from_py(obj: Bound<'_, PyAny>) -> PyResult<XmlMetadata> {
     let data: Vec<u8> = obj.getattr("data")?.extract()?;
     let mut item = XmlMetadata::new(data);
-    item.scheme_id = optional_ul(&obj, "scheme_id")?;
+    item.scheme_id = scheme_from_py(&obj)?;
+    item.text_encoding = text_encoding_from_py(&obj)?;
     if let Ok(value) = obj.getattr("language") {
         if !value.is_none() {
             let text: String = value.extract()?;
@@ -662,6 +669,43 @@ fn xml_from_py(obj: Bound<'_, PyAny>) -> PyResult<XmlMetadata> {
         }
     }
     Ok(item)
+}
+
+fn scheme_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Option<XmlScheme>> {
+    let Ok(value) = obj.getattr("scheme_id") else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+    if let Ok(bytes) = value.extract::<Vec<u8>>() {
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        let ul: [u8; 16] = bytes
+            .try_into()
+            .map_err(|_| PyValueError::new_err("scheme_id must be 16 bytes"))?;
+        return Ok(Some(XmlScheme::Ul(ul)));
+    }
+    let text: String = value.extract()?;
+    if text.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(XmlScheme::parse(&text)))
+}
+
+fn text_encoding_from_py(obj: &Bound<'_, PyAny>) -> PyResult<TextEncoding> {
+    let Ok(value) = obj.getattr("text_encoding") else {
+        return Ok(TextEncoding::Utf8);
+    };
+    if value.is_none() {
+        return Ok(TextEncoding::Utf8);
+    };
+    if let Ok(int) = value.extract::<i32>() {
+        return Ok(TextEncoding::from_i32(int));
+    }
+    let converted = value.call_method0("__int__")?;
+    Ok(TextEncoding::from_i32(converted.extract::<i32>()?))
 }
 
 fn flavour_from_py(value: &Bound<'_, PyAny>) -> i32 {
@@ -828,10 +872,19 @@ fn optional_ul(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<[u8; 16]>>
     Ok(Some(array))
 }
 
+#[pyfunction]
+fn scheme_from_name(name: &str) -> PyResult<Vec<u8>> {
+    XmlScheme::from_name(name)
+        .to_ul()
+        .map(|ul| ul.to_vec())
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
 #[pymodule]
 fn _mxfuse(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open_mxf, m)?)?;
     m.add_function(wrap_pyfunction!(write_mxf, m)?)?;
+    m.add_function(wrap_pyfunction!(scheme_from_name, m)?)?;
     m.add_class::<PyClip>()?;
     m.add_class::<PyWriter>()?;
     m.add_class::<PyTrack>()?;

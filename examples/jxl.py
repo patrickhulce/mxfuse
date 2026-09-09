@@ -44,8 +44,10 @@ JXL_CONTAINER = "060e2b340401010d0d01030102700100"
 JXL_CODING = "060e2b340401010d0401020270000000"
 JXL_META_CONTAINER = "060e2b340401010d0d01030102700300"
 XML_NS = "http://jxlmxf/exr-meta/1"
+XML_SCHEME = "urn:x-jxlmxf:exr-header-metadata:1"
 
 CLIP_XML = (
+    f'<?xml version="1.0" encoding="UTF-8"?>'
     f'<clip xmlns="{XML_NS}" codec="JPEG XL" width="{WIDTH}" height="{HEIGHT}" '
     f'editRate="{EDIT_RATE[0]}/{EDIT_RATE[1]}" sampleRate="48000" '
     f'channels="{CHANNELS}" bits="{BITS}"/>'
@@ -88,7 +90,11 @@ SPEC = ClipSpec(
             descriptor=DescriptorKind.GENERIC_DATA,
         ),
     ],
-    xml=[XmlMetadata(data=CLIP_XML, language="en", namespace=XML_NS)],
+    xml=[
+        XmlMetadata(
+            data=CLIP_XML, language="en", namespace=XML_NS, scheme_id=XML_SCHEME
+        )
+    ],
 )
 
 

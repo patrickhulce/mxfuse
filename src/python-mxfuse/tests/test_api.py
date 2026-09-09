@@ -8,6 +8,7 @@ from mxfuse import (
     EssenceType,
     Flavour,
     ReadOptions,
+    TextEncoding,
     TrackKind,
     TrackSpec,
     XmlMetadata,
@@ -177,6 +178,7 @@ def test_write_round_trip_xml_and_opaque() -> None:
     with open_mxf(sink) as clip:
         assert clip.xml[0].data == xml
         assert clip.xml[0].is_xml
+        assert clip.xml[0].text_encoding == TextEncoding.UTF8
         clip.select(clip.tracks)
         packages = list(clip)
         recovered = [package.frame(0).data for package in packages]
@@ -185,3 +187,87 @@ def test_write_round_trip_xml_and_opaque() -> None:
         by_count = list(clip.read(count=2))
         recovered = [package.frame(0).data for package in by_count]
         assert recovered == [b"frame-a", b"frame-b"]
+
+
+def _opaque_spec(xml: XmlMetadata) -> ClipSpec:
+    return ClipSpec(
+        edit_rate=(24, 1),
+        duration=1,
+        tracks=[
+            TrackSpec(
+                EssenceType.OPAQUE_PICTURE,
+                stored_width=64,
+                stored_height=32,
+                essence_container_ul=bytes.fromhex("060e2b34040101010d010301027f0101"),
+            )
+        ],
+        xml=[xml],
+    )
+
+
+def test_xml_scheme_match_and_validation() -> None:
+    urn = "urn:x-jxlmxf:exr-header-metadata:1"
+    other = "urn:x-jxlmxf:singularity-metadata:1"
+    payload = b'<clip xmlns="urn:x-mxfuse:test">hello</clip>'
+
+    def write(item: XmlMetadata) -> bytes:
+        sink = BytesIO()
+        with write_mxf(sink, _opaque_spec(item)) as writer:
+            writer.write_unit(b"frame")
+        return sink.getvalue()
+
+    first = write(
+        XmlMetadata(data=payload, scheme_id=urn, namespace="urn:x-mxfuse:test")
+    )
+    second = write(
+        XmlMetadata(data=payload, scheme_id=urn, namespace="urn:x-mxfuse:test")
+    )
+    other_bytes = write(
+        XmlMetadata(data=payload, scheme_id=other, namespace="urn:x-mxfuse:test")
+    )
+    defaulted = write(XmlMetadata(data=payload, namespace="urn:x-mxfuse:test"))
+
+    with open_mxf(BytesIO(first)) as clip:
+        scheme = clip.xml[0].scheme_id
+        assert isinstance(scheme, bytes)
+        assert len(scheme) == 16
+        assert clip.xml[0].data == payload
+        assert clip.xml[0].matches_scheme(urn)
+        assert not clip.xml[0].matches_scheme(other)
+        assert XmlMetadata.is_scheme_match(urn, scheme)
+        assert XmlMetadata(data=payload, scheme_id=urn).matches_scheme(urn)
+
+    with open_mxf(BytesIO(second)) as clip:
+        assert clip.xml[0].scheme_id == scheme
+    with open_mxf(BytesIO(other_bytes)) as clip:
+        assert clip.xml[0].scheme_id != scheme
+    with open_mxf(BytesIO(defaulted)) as clip:
+        assert clip.xml[0].scheme_id != scheme
+
+    raw_ul = bytes(range(16))
+    ul_file = write(
+        XmlMetadata(data=payload, scheme_id=raw_ul, namespace="urn:x-mxfuse:test")
+    )
+    with open_mxf(BytesIO(ul_file)) as clip:
+        assert clip.xml[0].scheme_id == raw_ul
+
+    with pytest.raises(Exception, match="malformed xml") as malformed:
+        write(
+            XmlMetadata(
+                data=b"<clip>",
+                scheme_id=urn,
+                namespace="urn:x-mxfuse:test",
+            )
+        )
+    assert urn in str(malformed.value)
+    assert "urn:x-mxfuse:test" in str(malformed.value)
+
+    with pytest.raises(Exception, match="BOM") as bom:
+        write(
+            XmlMetadata(
+                data=b"\xef\xbb\xbf" + payload,
+                scheme_id=urn,
+                namespace="urn:x-mxfuse:test",
+            )
+        )
+    assert urn in str(bom.value)

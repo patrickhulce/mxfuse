@@ -10,6 +10,7 @@ from typing import Any, Protocol, runtime_checkable
 from mxfuse._mxfuse import Clip as NativeClip
 from mxfuse._mxfuse import Writer as NativeWriter
 from mxfuse._mxfuse import open_mxf as _open_mxf
+from mxfuse._mxfuse import scheme_from_name as _scheme_from_name
 from mxfuse._mxfuse import write_mxf as _write_mxf
 
 
@@ -66,6 +67,12 @@ class DescriptorKind(IntEnum):
     RGBA = 2
     WAVE_AUDIO = 3
     GENERIC_DATA = 4
+
+
+class TextEncoding(IntEnum):
+    UNKNOWN = 0
+    UTF16 = 1
+    UTF8 = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,9 +195,31 @@ class XmlMetadata:
     namespace: str | None = None
     mime_type: str | None = None
     is_xml: bool = True
+    text_encoding: TextEncoding = TextEncoding.UTF8
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "scheme_id", _as_ul(self.scheme_id, "scheme_id"))
+        if isinstance(self.scheme_id, (bytes, bytearray)) and len(self.scheme_id) != 16:
+            raise ValueError("scheme_id must be 16 bytes")
+        object.__setattr__(self, "text_encoding", TextEncoding(int(self.text_encoding)))
+
+    @staticmethod
+    def is_scheme_match(scheme: bytes | str, ul: bytes) -> bool:
+        stored = bytes(ul)
+        if len(stored) != 16:
+            return False
+        try:
+            return _scheme_ul(scheme) == stored
+        except ValueError:
+            return False
+
+    def matches_scheme(self, scheme: bytes | str) -> bool:
+        if self.scheme_id is None:
+            return False
+        try:
+            stored = _scheme_ul(self.scheme_id)
+        except ValueError:
+            return False
+        return XmlMetadata.is_scheme_match(scheme, stored)
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,15 +339,31 @@ def _track_from_native(track: Any) -> Track:
     )
 
 
+def _scheme_ul(scheme: bytes | str) -> bytes:
+    if isinstance(scheme, (bytes, bytearray)):
+        raw = bytes(scheme)
+        if len(raw) != 16:
+            raise ValueError("scheme_id must be 16 bytes")
+        return raw
+    try:
+        raw = bytes.fromhex(scheme)
+    except ValueError:
+        raw = b""
+    if len(raw) == 16:
+        return raw
+    return bytes(_scheme_from_name(scheme))
+
+
 def _xml_from_native(item: Any) -> XmlMetadata:
-    scheme = bytes(item.scheme_id)
+    scheme_id = bytes(item.scheme_id)
     return XmlMetadata(
         data=bytes(item.data),
-        scheme_id=scheme or None,
+        scheme_id=scheme_id or None,
         language=item.language or None,
         namespace=item.namespace or None,
         mime_type=item.mime_type or None,
         is_xml=bool(item.is_xml),
+        text_encoding=TextEncoding(item.text_encoding),
     )
 
 
