@@ -266,18 +266,125 @@ impl TrackSpec {
     }
 }
 
+/// RP2057 / bmx text encoding. Wrapping (inline vs Generic Stream) follows the
+/// encoding detected from the payload, not this field.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(i32)]
+pub enum TextEncoding {
+    Unknown = 0,
+    Utf16 = 1,
+    #[default]
+    Utf8 = 2,
+}
+
+impl TextEncoding {
+    pub fn from_i32(value: i32) -> Self {
+        match value {
+            1 => Self::Utf16,
+            2 => Self::Utf8,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self as i32
+    }
+}
+
+/// RP2057 scheme identity: a 16-byte UL, or a name/URN hashed to a UUID v3 UL.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum XmlScheme {
+    Ul([u8; 16]),
+    Name(String),
+}
+
+impl XmlScheme {
+    pub fn from_ul(ul: [u8; 16]) -> Self {
+        Self::Ul(ul)
+    }
+
+    pub fn from_name(name: impl Into<String>) -> Self {
+        Self::Name(name.into())
+    }
+
+    /// Parse a 32-char hex UL, otherwise treat the string as a scheme name.
+    pub fn parse(value: &str) -> Self {
+        match parse_hex_ul(value) {
+            Some(ul) => Self::Ul(ul),
+            None => Self::Name(value.to_string()),
+        }
+    }
+
+    /// The UL stored in MXF. Names are hashed with bmx's UUID v3 + half-swap.
+    pub fn to_ul(&self) -> crate::error::Result<[u8; 16]> {
+        match self {
+            Self::Ul(ul) => Ok(*ul),
+            Self::Name(name) => scheme_ul_from_name(name),
+        }
+    }
+}
+
+impl From<[u8; 16]> for XmlScheme {
+    fn from(ul: [u8; 16]) -> Self {
+        Self::Ul(ul)
+    }
+}
+
+impl From<&str> for XmlScheme {
+    fn from(value: &str) -> Self {
+        Self::parse(value)
+    }
+}
+
+impl From<String> for XmlScheme {
+    fn from(value: String) -> Self {
+        Self::parse(&value)
+    }
+}
+
+fn parse_hex_ul(value: &str) -> Option<[u8; 16]> {
+    if value.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (index, slot) in out.iter_mut().enumerate() {
+        *slot = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+fn scheme_ul_from_name(name: &str) -> crate::error::Result<[u8; 16]> {
+    use std::ffi::CString;
+
+    use mxfuse_sys::{mxfuse_xml_scheme_from_name, MxfuseError, MXFUSE_OK};
+
+    let c_name =
+        CString::new(name).map_err(|_| crate::error::Error::new("xml scheme contains NUL"))?;
+    let mut out = [0u8; 16];
+    let mut err = MxfuseError::default();
+    let status =
+        unsafe { mxfuse_xml_scheme_from_name(c_name.as_ptr(), out.as_mut_ptr(), &mut err) };
+    if status != MXFUSE_OK {
+        return Err(crate::error::Error::from_shim(&err));
+    }
+    Ok(out)
+}
+
 /// Clip-level XML (ST 434 / generic stream), not an essence track.
 ///
-/// `mime_type` and `is_xml` are populated on read. On write, the payload is
-/// always stored as UTF-8 XML; `mime_type` is ignored.
+/// `scheme_id` is a URN/name or a 16-byte UL on write. Read always returns
+/// [`XmlScheme::Ul`]. `mime_type` and `is_xml` are populated on read. On write,
+/// the payload is stored as XML; `mime_type` is ignored. Payloads must not start
+/// with a BOM; inline vs Generic Stream follows detected encoding.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct XmlMetadata {
     pub data: Vec<u8>,
-    pub scheme_id: Option<[u8; 16]>,
+    pub scheme_id: Option<XmlScheme>,
     pub language: Option<String>,
     pub namespace: Option<String>,
     pub mime_type: Option<String>,
     pub is_xml: bool,
+    pub text_encoding: TextEncoding,
 }
 
 impl XmlMetadata {
@@ -289,7 +396,25 @@ impl XmlMetadata {
             namespace: None,
             mime_type: None,
             is_xml: true,
+            text_encoding: TextEncoding::Utf8,
         }
+    }
+
+    /// True when `scheme` hashes to (or equals) the stored 16-byte UL.
+    pub fn is_scheme_match(scheme: impl Into<XmlScheme>, ul: &[u8; 16]) -> bool {
+        scheme
+            .into()
+            .to_ul()
+            .ok()
+            .is_some_and(|expected| expected == *ul)
+    }
+
+    /// True when this object's scheme identity matches `scheme`.
+    pub fn matches_scheme(&self, scheme: impl Into<XmlScheme>) -> bool {
+        let Some(stored) = self.scheme_id.as_ref().and_then(|item| item.to_ul().ok()) else {
+            return false;
+        };
+        Self::is_scheme_match(scheme, &stored)
     }
 }
 

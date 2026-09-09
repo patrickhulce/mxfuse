@@ -23,7 +23,7 @@ use mxfuse_sys::{
 
 use crate::error::{Error, Result};
 use crate::source::ByteSink;
-use crate::types::{ClipSpec, EssenceType, Identity, TrackSpec, XmlMetadata};
+use crate::types::{ClipSpec, EssenceType, Identity, TrackSpec, XmlMetadata, XmlScheme};
 
 struct SinkBox {
     sink: Box<dyn ByteSink>,
@@ -292,21 +292,35 @@ fn add_xml(raw: *mut MxfuseWriter, item: &XmlMetadata) -> Result<()> {
         }
         None => None,
     };
+    let scheme_name = match item.scheme_id.as_ref() {
+        Some(XmlScheme::Name(name)) => {
+            Some(CString::new(name.as_str()).map_err(|_| Error::new("xml scheme contains NUL"))?)
+        }
+        _ => None,
+    };
+    let scheme_ul = match item.scheme_id.as_ref() {
+        Some(XmlScheme::Ul(ul)) => Some(*ul),
+        _ => None,
+    };
     let mut err = MxfuseError::default();
     let status = unsafe {
         mxfuse_writer_add_xml(
             raw,
             item.data.as_ptr(),
             size,
-            item.scheme_id
+            scheme_ul
                 .as_ref()
                 .map_or(std::ptr::null(), |ul| ul.as_ptr()),
+            scheme_name
+                .as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
             language
                 .as_ref()
                 .map_or(std::ptr::null(), |value| value.as_ptr()),
             namespace
                 .as_ref()
                 .map_or(std::ptr::null(), |value| value.as_ptr()),
+            item.text_encoding.as_i32(),
             &mut err,
         )
     };

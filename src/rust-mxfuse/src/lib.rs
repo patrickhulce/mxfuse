@@ -15,6 +15,7 @@ pub use reader::{open_mxf, Clip};
 pub use source::{ByteSink, ByteSource, CountingSource, ReadAhead, RecordingSource};
 pub use types::{
     ClipSpec, DescriptorKind, EssenceType, Flavour, Frame, Identity, Package, PixelComponent,
-    Rational, ReadOptions, Timecode, Track, TrackKind, TrackSpec, XmlMetadata,
+    Rational, ReadOptions, TextEncoding, Timecode, Track, TrackKind, TrackSpec, XmlMetadata,
+    XmlScheme,
 };
 pub use writer::{write_mxf, ClipWriter};

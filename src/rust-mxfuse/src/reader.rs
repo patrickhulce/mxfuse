@@ -13,8 +13,8 @@ use mxfuse_sys::{
 use crate::error::{Error, Result};
 use crate::source::{ByteSource, ReadAhead};
 use crate::types::{
-    DescriptorKind, EssenceType, Frame, Package, PixelComponent, Rational, ReadOptions, Timecode,
-    Track, TrackKind, XmlMetadata,
+    DescriptorKind, EssenceType, Frame, Package, PixelComponent, Rational, ReadOptions,
+    TextEncoding, Timecode, Track, TrackKind, XmlMetadata, XmlScheme,
 };
 
 struct SourceBox {
@@ -378,7 +378,7 @@ fn pop_xml(raw: *mut MxfuseReader, index: usize) -> Result<XmlMetadata> {
     let scheme_id = if view.scheme_id.iter().all(|byte| *byte == 0) {
         None
     } else {
-        Some(view.scheme_id)
+        Some(XmlScheme::Ul(view.scheme_id))
     };
     let item = XmlMetadata {
         data,
@@ -387,6 +387,7 @@ fn pop_xml(raw: *mut MxfuseReader, index: usize) -> Result<XmlMetadata> {
         namespace,
         mime_type,
         is_xml: view.is_xml != 0,
+        text_encoding: TextEncoding::from_i32(view.text_encoding),
     };
     unsafe { mxfuse_xml_free(&mut view) };
     Ok(item)

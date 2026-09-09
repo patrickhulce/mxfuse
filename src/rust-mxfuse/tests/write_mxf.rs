@@ -327,6 +327,7 @@ fn xml_round_trip_preserves_payload() {
             namespace: Some("urn:x-mxfuse:test".to_string()),
             mime_type: None,
             is_xml: true,
+            text_encoding: mxfuse::TextEncoding::Utf8,
         }],
         ..ClipSpec::default()
     };
@@ -340,6 +341,7 @@ fn xml_round_trip_preserves_payload() {
     assert_eq!(clip.xml().len(), 1);
     assert_eq!(clip.xml()[0].data, xml);
     assert!(clip.xml()[0].is_xml);
+    assert_eq!(clip.xml()[0].text_encoding, mxfuse::TextEncoding::Utf8);
     let tracks = clip.tracks().to_vec();
     clip.select(tracks.iter()).unwrap();
     clip.seek(0).unwrap();
@@ -424,6 +426,7 @@ fn jxl_mapping_writes_rgba_descriptor_and_element_key() {
             data: b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><jxlmxf-exr-meta xmlns=\"http://jxlmxf/exr-meta/1\" version=\"1\"/>".to_vec(),
             language: Some("en".to_string()),
             namespace: Some("http://jxlmxf/exr-meta/1".to_string()),
+            scheme_id: Some(mxfuse::XmlScheme::from_name("urn:x-jxlmxf:exr-header-metadata:1")),
             ..XmlMetadata::new(Vec::new())
         }],
         system_item: true,
@@ -468,6 +471,8 @@ fn jxl_mapping_writes_rgba_descriptor_and_element_key() {
         clip.xml()[0].namespace.as_deref(),
         Some("http://jxlmxf/exr-meta/1")
     );
+    assert!(clip.xml()[0].matches_scheme("urn:x-jxlmxf:exr-header-metadata:1"));
+    assert!(!clip.xml()[0].matches_scheme("urn:x-jxlmxf:singularity-metadata:1"));
     let tracks = clip.tracks().to_vec();
     clip.select(tracks.iter()).unwrap();
     clip.seek(0).unwrap();
@@ -530,4 +535,133 @@ fn start_timecode_and_identity_round_trip() {
             drop_frame: false,
         })
     );
+}
+
+#[test]
+fn xml_scheme_round_trips_and_rejects_bad_payloads() {
+    let _guard = exclusive_write();
+    let container = [
+        0x06, 0x0e, 0x2b, 0x34, 0x04, 0x01, 0x01, 0x01, 0x0d, 0x01, 0x03, 0x01, 0x02, 0x7f, 0x01,
+        0x01,
+    ];
+    let xml = b"<clip xmlns=\"urn:x-mxfuse:test\">hello</clip>".to_vec();
+    let urn = "urn:x-jxlmxf:exr-header-metadata:1";
+    struct SharedSink(std::sync::Arc<std::sync::Mutex<Cursor<Vec<u8>>>>);
+    impl ByteSink for SharedSink {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            std::io::Write::write(&mut *self.0.lock().unwrap(), buf)
+        }
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            std::io::Seek::seek(&mut *self.0.lock().unwrap(), pos)
+        }
+        fn tell(&mut self) -> io::Result<u64> {
+            Ok(self.0.lock().unwrap().position())
+        }
+    }
+
+    let spec_for = |scheme: Option<mxfuse::XmlScheme>, data: Vec<u8>| ClipSpec {
+        edit_rate: Rational { num: 24, den: 1 },
+        flavour: Flavour::DEFAULT,
+        duration: Some(1),
+        tracks: vec![TrackSpec {
+            stored_width: Some(64),
+            stored_height: Some(32),
+            essence_container_ul: Some(container),
+            ..TrackSpec::new(EssenceType::OPAQUE_PICTURE)
+        }],
+        xml: vec![XmlMetadata {
+            data,
+            scheme_id: scheme,
+            language: Some("en".to_string()),
+            namespace: Some("urn:x-mxfuse:test".to_string()),
+            ..XmlMetadata::new(Vec::new())
+        }],
+        ..ClipSpec::default()
+    };
+
+    let write = |scheme: Option<mxfuse::XmlScheme>, data: Vec<u8>| {
+        let sink = std::sync::Arc::new(std::sync::Mutex::new(Cursor::new(Vec::new())));
+        let mut writer = write_mxf(SharedSink(sink.clone()), spec_for(scheme, data))?;
+        writer.write(0, b"frame")?;
+        writer.finish()?;
+        let bytes = sink.lock().unwrap().get_ref().clone();
+        Ok::<_, mxfuse::Error>(bytes)
+    };
+
+    let first = write(Some(mxfuse::XmlScheme::from_name(urn)), xml.clone()).unwrap();
+    let second = write(Some(mxfuse::XmlScheme::from_name(urn)), xml.clone()).unwrap();
+    let other = write(
+        Some(mxfuse::XmlScheme::from_name(
+            "urn:x-jxlmxf:singularity-metadata:1",
+        )),
+        xml.clone(),
+    )
+    .unwrap();
+    let defaulted = write(None, xml.clone()).unwrap();
+    let ul_bytes = {
+        let clip = open_mxf(Cursor::new(first.clone()), ReadOptions::default()).unwrap();
+        match clip.xml()[0].scheme_id.clone().unwrap() {
+            mxfuse::XmlScheme::Ul(ul) => ul,
+            mxfuse::XmlScheme::Name(_) => panic!("read scheme must be a UL"),
+        }
+    };
+
+    let clip = open_mxf(Cursor::new(first), ReadOptions::default()).unwrap();
+    assert_eq!(clip.xml()[0].data, xml);
+    assert!(clip.xml()[0].matches_scheme(urn));
+    assert!(!clip.xml()[0].matches_scheme("urn:x-jxlmxf:singularity-metadata:1"));
+    assert!(XmlMetadata::is_scheme_match(urn, &ul_bytes));
+    assert!(XmlMetadata {
+        scheme_id: Some(mxfuse::XmlScheme::from_name(urn)),
+        ..XmlMetadata::new(xml.clone())
+    }
+    .matches_scheme(urn));
+
+    let clip2 = open_mxf(Cursor::new(second), ReadOptions::default()).unwrap();
+    assert_eq!(
+        clip2.xml()[0]
+            .scheme_id
+            .as_ref()
+            .and_then(|s| s.to_ul().ok()),
+        Some(ul_bytes)
+    );
+    let other_ul = open_mxf(Cursor::new(other), ReadOptions::default())
+        .unwrap()
+        .xml()[0]
+        .scheme_id
+        .as_ref()
+        .and_then(|s| s.to_ul().ok());
+    assert_ne!(other_ul, Some(ul_bytes));
+    let default_ul = open_mxf(Cursor::new(defaulted), ReadOptions::default())
+        .unwrap()
+        .xml()[0]
+        .scheme_id
+        .as_ref()
+        .and_then(|s| s.to_ul().ok());
+    assert_ne!(default_ul, Some(ul_bytes));
+
+    let raw_ul = [0x11u8; 16];
+    let from_ul = write(Some(mxfuse::XmlScheme::Ul(raw_ul)), xml.clone()).unwrap();
+    let clip_ul = open_mxf(Cursor::new(from_ul), ReadOptions::default()).unwrap();
+    assert_eq!(
+        clip_ul.xml()[0]
+            .scheme_id
+            .as_ref()
+            .and_then(|s| s.to_ul().ok()),
+        Some(raw_ul)
+    );
+
+    let malformed = write(Some(mxfuse::XmlScheme::from_name(urn)), b"<clip>".to_vec());
+    let err = malformed.unwrap_err().to_string();
+    assert!(err.contains("malformed xml"));
+    assert!(err.contains(urn));
+    assert!(err.contains("urn:x-mxfuse:test"));
+
+    let mut bom = b"\xef\xbb\xbf".to_vec();
+    bom.extend_from_slice(&xml);
+    let bom_err = write(Some(mxfuse::XmlScheme::from_name(urn)), bom)
+        .unwrap_err()
+        .to_string();
+    assert!(bom_err.contains("BOM"));
+    assert!(bom_err.contains(urn));
 }
