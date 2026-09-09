@@ -18,6 +18,10 @@ pub const MXFUSE_NAME_LEN: usize = 64;
 pub const MXFUSE_VERSION_LEN: usize = 64;
 pub const MXFUSE_PIXEL_LAYOUT_LEN: usize = 16;
 
+pub const MXFUSE_TEXT_UNKNOWN: c_int = 0;
+pub const MXFUSE_TEXT_UTF16: c_int = 1;
+pub const MXFUSE_TEXT_UTF8: c_int = 2;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct MxfuseError {
@@ -325,6 +329,7 @@ pub struct MxfuseXmlView {
     pub mime_type: [c_char; MXFUSE_XML_MIME_LEN],
     pub ns: [c_char; MXFUSE_XML_NS_LEN],
     pub is_xml: c_int,
+    pub text_encoding: c_int,
 }
 
 impl Default for MxfuseXmlView {
@@ -337,6 +342,7 @@ impl Default for MxfuseXmlView {
             mime_type: [0; MXFUSE_XML_MIME_LEN],
             ns: [0; MXFUSE_XML_NS_LEN],
             is_xml: 0,
+            text_encoding: 0,
         }
     }
 }
@@ -409,6 +415,12 @@ extern "C" {
 
     pub fn mxfuse_xml_free(view: *mut MxfuseXmlView);
 
+    pub fn mxfuse_xml_scheme_from_name(
+        name: *const c_char,
+        out: *mut u8,
+        err: *mut MxfuseError,
+    ) -> c_int;
+
     pub fn mxfuse_essence_type_name(essence_type: i32) -> *const c_char;
 
     pub fn mxfuse_writer_open(
@@ -439,8 +451,10 @@ extern "C" {
         data: *const u8,
         size: u32,
         scheme_id: *const u8,
+        scheme_name: *const c_char,
         language: *const c_char,
         ns: *const c_char,
+        text_encoding: c_int,
         err: *mut MxfuseError,
     ) -> c_int;
 

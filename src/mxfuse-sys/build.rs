@@ -283,6 +283,7 @@ fn compile_shim(manifest_dir: &Path, bmx_src: &Path, target_os: &str) {
         .include(bmx_src.join("include"))
         .include(bmx_src.join("deps/libMXF"))
         .include(bmx_src.join("deps/libMXFpp"))
+        .include(bmx_src.join("deps/libexpat/expat/lib"))
         .warnings(false);
 
     if target_os == "windows" {

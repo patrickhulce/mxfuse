@@ -50,6 +50,10 @@ extern "C" {
 #define MXFUSE_DESCRIPTOR_WAVE 3
 #define MXFUSE_DESCRIPTOR_DATA 4
 
+#define MXFUSE_TEXT_UNKNOWN 0
+#define MXFUSE_TEXT_UTF16 1
+#define MXFUSE_TEXT_UTF8 2
+
 #define MXFUSE_CLIP_HAS_START_TIMECODE      (1u << 0)
 #define MXFUSE_CLIP_HAS_TIMECODE_TRACK      (1u << 1)
 #define MXFUSE_CLIP_HAS_SYSTEM_ITEM         (1u << 2)
@@ -148,6 +152,7 @@ typedef struct MxfuseXmlView {
     char mime_type[MXFUSE_XML_MIME_LEN];
     char ns[MXFUSE_XML_NS_LEN];
     int is_xml;
+    int text_encoding;
 } MxfuseXmlView;
 
 typedef struct MxfuseTrackSpec {
@@ -244,6 +249,11 @@ int mxfuse_reader_xml(
     MxfuseError *err
 );
 void mxfuse_xml_free(MxfuseXmlView *view);
+int mxfuse_xml_scheme_from_name(
+    const char *name,
+    uint8_t out[MXFUSE_UL_LEN],
+    MxfuseError *err
+);
 const char *mxfuse_essence_type_name(int32_t essence_type);
 
 int mxfuse_writer_open(
@@ -271,8 +281,10 @@ int mxfuse_writer_add_xml(
     const uint8_t *data,
     uint32_t size,
     const uint8_t *scheme_id,
+    const char *scheme_name,
     const char *language,
     const char *ns,
+    int text_encoding,
     MxfuseError *err
 );
 int mxfuse_writer_prepare(MxfuseWriter *writer, MxfuseError *err);

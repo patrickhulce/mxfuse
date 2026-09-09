@@ -21,6 +21,7 @@
 #include <bmx/BMXException.h>
 #include <bmx/BMXTypes.h>
 #include <bmx/EssenceType.h>
+#include <bmx/Utils.h>
 #include <bmx/clip_writer/ClipWriter.h>
 #include <bmx/clip_writer/ClipWriterTrack.h>
 #include <bmx/frame/Frame.h>
@@ -45,6 +46,8 @@
 #include <mxf/mxf_cache_file.h>
 #include <mxf/mxf_file.h>
 #include <mxf/mxf_types.h>
+#include <mxf/mxf_utils.h>
+#include <expat.h>
 
 namespace {
 
@@ -58,6 +61,104 @@ void set_error(MxfuseError *err, const char *message)
         return;
     }
     std::snprintf(err->message, MXFUSE_ERROR_LEN, "%s", message);
+}
+
+const char *scheme_label(const uint8_t *scheme_id, const char *scheme_name, char *hex, size_t hex_len)
+{
+    if (scheme_name && scheme_name[0]) {
+        return scheme_name;
+    }
+    if (scheme_id && hex && hex_len >= 33) {
+        std::snprintf(
+            hex,
+            hex_len,
+            "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+            scheme_id[0], scheme_id[1], scheme_id[2], scheme_id[3],
+            scheme_id[4], scheme_id[5], scheme_id[6], scheme_id[7],
+            scheme_id[8], scheme_id[9], scheme_id[10], scheme_id[11],
+            scheme_id[12], scheme_id[13], scheme_id[14], scheme_id[15]
+        );
+        return hex;
+    }
+    return "(default)";
+}
+
+const char *namespace_label(const char *ns)
+{
+    return (ns && ns[0]) ? ns : "(none)";
+}
+
+void set_xml_error(
+    MxfuseError *err,
+    const uint8_t *scheme_id,
+    const char *scheme_name,
+    const char *ns,
+    const char *detail
+)
+{
+    if (!err) {
+        return;
+    }
+    char hex[33];
+    std::snprintf(
+        err->message,
+        MXFUSE_ERROR_LEN,
+        "malformed xml for scheme=%s namespace=%s: %s",
+        scheme_label(scheme_id, scheme_name, hex, sizeof(hex)),
+        namespace_label(ns),
+        detail ? detail : "unknown error"
+    );
+}
+
+bool payload_has_bom(const uint8_t *data, uint32_t size)
+{
+    if (size >= 3 && data[0] == 0xef && data[1] == 0xbb && data[2] == 0xbf) {
+        return true;
+    }
+    if (size >= 2 && ((data[0] == 0xfe && data[1] == 0xff) || (data[0] == 0xff && data[1] == 0xfe))) {
+        return true;
+    }
+    return false;
+}
+
+bool payload_is_well_formed_xml(const uint8_t *data, uint32_t size, std::string *error)
+{
+    XML_Parser parser = XML_ParserCreateNS(0, ' ');
+    if (!parser) {
+        if (error) {
+            *error = "XML_ParserCreate returned NULL";
+        }
+        return false;
+    }
+    XML_Status status = XML_Parse(parser, reinterpret_cast<const char *>(data), static_cast<int>(size), 1);
+    bool ok = status != XML_STATUS_ERROR;
+    if (!ok && error) {
+        *error = XML_ErrorString(XML_GetErrorCode(parser));
+    }
+    XML_ParserFree(parser);
+    return ok;
+}
+
+int text_encoding_from_bmx(bmx::TextEncoding encoding)
+{
+    if (encoding == bmx::UTF8) {
+        return MXFUSE_TEXT_UTF8;
+    }
+    if (encoding == bmx::UTF16) {
+        return MXFUSE_TEXT_UTF16;
+    }
+    return MXFUSE_TEXT_UNKNOWN;
+}
+
+bmx::TextEncoding text_encoding_to_bmx(int encoding)
+{
+    if (encoding == MXFUSE_TEXT_UTF8) {
+        return bmx::UTF8;
+    }
+    if (encoding == MXFUSE_TEXT_UTF16) {
+        return bmx::UTF16;
+    }
+    return bmx::UNKNOWN_TEXT_ENCODING;
 }
 
 } // namespace
@@ -682,6 +783,7 @@ int mxfuse_reader_xml(
         std::snprintf(out->mime_type, MXFUSE_XML_MIME_LEN, "%s", obj->GetMimeType().c_str());
         std::snprintf(out->ns, MXFUSE_XML_NS_LEN, "%s", obj->GetTextDataDescription().c_str());
         out->is_xml = obj->IsXML() ? 1 : 0;
+        out->text_encoding = text_encoding_from_bmx(obj->GetEncoding());
         return MXFUSE_OK;
     } catch (const bmx::BMXException &e) {
         set_error(err, e.what());
@@ -1011,18 +1113,75 @@ int mxfuse_writer_create_track(
     }
 }
 
+int mxfuse_xml_scheme_from_name(const char *name, uint8_t out[MXFUSE_UL_LEN], MxfuseError *err)
+{
+    if (!name || !out) {
+        set_error(err, "invalid arguments to mxfuse_xml_scheme_from_name");
+        return MXFUSE_ERR;
+    }
+    try {
+        bmx::UUID uuid = bmx::create_uuid_from_name(name);
+        mxfUL ul;
+        mxf_swap_uid(&ul, reinterpret_cast<const mxfUID *>(&uuid));
+        std::memcpy(out, &ul, MXFUSE_UL_LEN);
+        return MXFUSE_OK;
+    } catch (const bmx::BMXException &e) {
+        set_error(err, e.what());
+        return MXFUSE_ERR;
+    } catch (const std::exception &e) {
+        set_error(err, e.what());
+        return MXFUSE_ERR;
+    } catch (...) {
+        set_error(err, "unknown error hashing xml scheme name");
+        return MXFUSE_ERR;
+    }
+}
+
 int mxfuse_writer_add_xml(
     MxfuseWriter *writer,
     const uint8_t *data,
     uint32_t size,
     const uint8_t *scheme_id,
+    const char *scheme_name,
     const char *language,
     const char *ns,
+    int text_encoding,
     MxfuseError *err
 )
 {
     if (!writer || !writer->clip || !data || size == 0) {
         set_error(err, "invalid arguments to mxfuse_writer_add_xml");
+        return MXFUSE_ERR;
+    }
+    if (scheme_id && scheme_name && scheme_name[0]) {
+        set_error(err, "xml scheme UL and scheme name are mutually exclusive");
+        return MXFUSE_ERR;
+    }
+    if (payload_has_bom(data, size)) {
+        char hex[33];
+        std::snprintf(
+            err->message,
+            MXFUSE_ERROR_LEN,
+            "xml payload must not start with a BOM (scheme=%s namespace=%s)",
+            scheme_label(scheme_id, scheme_name, hex, sizeof(hex)),
+            namespace_label(ns)
+        );
+        return MXFUSE_ERR;
+    }
+    std::string parse_error;
+    if (!payload_is_well_formed_xml(data, size, &parse_error)) {
+        set_xml_error(err, scheme_id, scheme_name, ns, parse_error.c_str());
+        return MXFUSE_ERR;
+    }
+    bmx::TextEncoding detected = bmx::UNKNOWN_TEXT_ENCODING;
+    bmx::ByteOrder byte_order = bmx::UNKNOWN_BYTE_ORDER;
+    bmx::get_xml_encoding(data, size, &detected, &byte_order);
+    if (text_encoding == MXFUSE_TEXT_UTF8 && detected != bmx::UTF8) {
+        set_xml_error(err, scheme_id, scheme_name, ns, "payload is not UTF-8");
+        return MXFUSE_ERR;
+    }
+    if (text_encoding == MXFUSE_TEXT_UTF16 && detected != bmx::UTF16) {
+        set_xml_error(err, scheme_id, scheme_name, ns, "payload is not UTF-16");
         return MXFUSE_ERR;
     }
     try {
@@ -1033,9 +1192,13 @@ int mxfuse_writer_add_xml(
         }
         bmx::OP1AXMLTrack *xml = op1a->CreateXMLTrack();
         xml->SetSource(data, size, true);
-        xml->SetTextEncoding(bmx::UTF8);
+        if (text_encoding == MXFUSE_TEXT_UTF8 || text_encoding == MXFUSE_TEXT_UTF16) {
+            xml->SetTextEncoding(text_encoding_to_bmx(text_encoding));
+        }
         if (scheme_id) {
             xml->SetSchemeId(ul_from_bytes(scheme_id));
+        } else if (scheme_name && scheme_name[0]) {
+            xml->SetSchemeId(scheme_name);
         }
         if (language && language[0]) {
             xml->SetLanguageCode(language);
@@ -1045,16 +1208,16 @@ int mxfuse_writer_add_xml(
         }
         return MXFUSE_OK;
     } catch (const bmx::BMXException &e) {
-        set_error(err, e.what());
+        set_xml_error(err, scheme_id, scheme_name, ns, e.what());
         return MXFUSE_ERR;
     } catch (const mxfpp::MXFException &e) {
-        set_error(err, e.getMessage().c_str());
+        set_xml_error(err, scheme_id, scheme_name, ns, e.getMessage().c_str());
         return MXFUSE_ERR;
     } catch (const std::exception &e) {
-        set_error(err, e.what());
+        set_xml_error(err, scheme_id, scheme_name, ns, e.what());
         return MXFUSE_ERR;
     } catch (...) {
-        set_error(err, "unknown error adding xml");
+        set_xml_error(err, scheme_id, scheme_name, ns, "unknown error adding xml");
         return MXFUSE_ERR;
     }
 }
