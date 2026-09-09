@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use mxfuse::{
     ByteSource, ClipSpec, DescriptorKind, EssenceType, Flavour, Identity, PixelComponent, Rational,
-    ReadOptions, Timecode, TrackKind, TrackSpec, XmlMetadata,
+    ReadOptions, TextEncoding, Timecode, TrackKind, TrackSpec, XmlMetadata, XmlScheme,
 };
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -74,11 +74,12 @@ pub struct NativeFrame {
 #[napi(object)]
 pub struct NativeXmlMetadata {
     pub data: Buffer,
-    pub scheme_id: Option<Buffer>,
+    pub scheme_id: Option<Either<Buffer, String>>,
     pub language: Option<String>,
     pub namespace: Option<String>,
     pub mime_type: Option<String>,
-    pub is_xml: bool,
+    pub is_xml: Option<bool>,
+    pub text_encoding: Option<i32>,
 }
 
 #[napi(object)]
@@ -446,6 +447,14 @@ pub async fn write_mxf_to_path(path: String, spec: NativeClipSpec) -> napi::Resu
     .map_err(|error| Error::from_reason(error.to_string()))?
 }
 
+#[napi]
+pub fn scheme_from_name(name: String) -> napi::Result<Buffer> {
+    XmlScheme::from_name(name)
+        .to_ul()
+        .map(|ul| Buffer::from(ul.to_vec()))
+        .map_err(|error| Error::from_reason(error.to_string()))
+}
+
 fn clip_spec_from_native(spec: NativeClipSpec) -> napi::Result<ClipSpec> {
     let mut tracks = Vec::with_capacity(spec.tracks.len());
     for track in spec.tracks {
@@ -581,23 +590,56 @@ fn optional_umid(value: Option<Buffer>, name: &str) -> napi::Result<Option<[u8; 
 fn xml_to_native(item: &XmlMetadata) -> NativeXmlMetadata {
     NativeXmlMetadata {
         data: Buffer::from(item.data.clone()),
-        scheme_id: item.scheme_id.map(|ul| Buffer::from(ul.to_vec())),
+        scheme_id: match &item.scheme_id {
+            Some(XmlScheme::Ul(ul)) => Some(Either::A(Buffer::from(ul.to_vec()))),
+            Some(XmlScheme::Name(name)) => Some(Either::B(name.clone())),
+            None => None,
+        },
         language: item.language.clone(),
         namespace: item.namespace.clone(),
         mime_type: item.mime_type.clone(),
-        is_xml: item.is_xml,
+        is_xml: Some(item.is_xml),
+        text_encoding: Some(item.text_encoding.as_i32()),
     }
 }
 
 fn xml_from_native(item: NativeXmlMetadata) -> napi::Result<XmlMetadata> {
     Ok(XmlMetadata {
         data: item.data.to_vec(),
-        scheme_id: optional_ul(item.scheme_id, "schemeId")?,
+        scheme_id: xml_scheme_from_native(item.scheme_id)?,
         language: item.language.filter(|value| !value.is_empty()),
         namespace: item.namespace.filter(|value| !value.is_empty()),
         mime_type: item.mime_type.filter(|value| !value.is_empty()),
-        is_xml: item.is_xml,
+        is_xml: item.is_xml.unwrap_or(true),
+        text_encoding: TextEncoding::from_i32(
+            item.text_encoding.unwrap_or(TextEncoding::Utf8.as_i32()),
+        ),
     })
+}
+
+fn xml_scheme_from_native(
+    value: Option<Either<Buffer, String>>,
+) -> napi::Result<Option<XmlScheme>> {
+    match value {
+        None => Ok(None),
+        Some(Either::A(buffer)) => {
+            let bytes = buffer.to_vec();
+            if bytes.is_empty() {
+                return Ok(None);
+            }
+            let ul: [u8; 16] = bytes
+                .try_into()
+                .map_err(|_| Error::from_reason("scheme_id must be 16 bytes"))?;
+            Ok(Some(XmlScheme::Ul(ul)))
+        }
+        Some(Either::B(name)) => {
+            if name.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(XmlScheme::parse(&name)))
+            }
+        }
+    }
 }
 
 fn optional_ul(value: Option<Buffer>, name: &str) -> napi::Result<Option<[u8; 16]>> {

@@ -5,6 +5,7 @@ import {
   NativeWriter,
   openMxfFromBuffer,
   openMxfFromPath,
+  schemeFromName,
   writeMxfToPath,
   type NativeClipSpec,
   type NativeReadOptions,
@@ -57,6 +58,14 @@ export const DescriptorKind = {
 
 export type DescriptorKind =
   (typeof DescriptorKind)[keyof typeof DescriptorKind];
+
+export const TextEncoding = {
+  UNKNOWN: 0,
+  UTF16: 1,
+  UTF8: 2,
+} as const;
+
+export type TextEncoding = (typeof TextEncoding)[keyof typeof TextEncoding];
 
 export interface PixelComponent {
   code: number;
@@ -118,12 +127,65 @@ export interface TrackSpec {
 
 export interface XmlMetadata {
   data: Uint8Array;
-  schemeId?: Uint8Array;
+  schemeId?: Uint8Array | string;
   language?: string;
   namespace?: string;
   mimeType?: string;
   isXml?: boolean;
+  textEncoding?: TextEncoding;
+  matchesScheme?(scheme: Uint8Array | string): boolean;
 }
+
+function isHexUl(value: string): boolean {
+  return value.length === 32 && /^[0-9a-fA-F]+$/.test(value);
+}
+
+function schemeToUl(
+  scheme: Uint8Array | string | undefined,
+): Uint8Array | undefined {
+  if (scheme == null) {
+    return undefined;
+  }
+  if (typeof scheme !== "string") {
+    return scheme.byteLength === 16 ? scheme : undefined;
+  }
+  if (isHexUl(scheme)) {
+    return Uint8Array.from(Buffer.from(scheme, "hex"));
+  }
+  return Uint8Array.from(schemeFromName(scheme));
+}
+
+function attachXmlHelpers(
+  item: Omit<XmlMetadata, "matchesScheme">,
+): XmlMetadata {
+  const xml: XmlMetadata = {
+    ...item,
+    matchesScheme(scheme: Uint8Array | string) {
+      return XmlMetadata.isSchemeMatch(scheme, xml.schemeId);
+    },
+  };
+  return xml;
+}
+
+export const XmlMetadata = {
+  isSchemeMatch(
+    scheme: Uint8Array | string,
+    ul: Uint8Array | string | undefined,
+  ): boolean {
+    const stored = schemeToUl(ul);
+    if (!stored || stored.byteLength !== 16) {
+      return false;
+    }
+    const expected = schemeToUl(scheme);
+    if (!expected) {
+      return false;
+    }
+    if (expected.byteLength !== stored.byteLength) {
+      return false;
+    }
+    return expected.every((byte, index) => byte === stored[index]);
+  },
+};
 
 export interface ClipSpec {
   editRate: readonly [number, number];
@@ -230,11 +292,17 @@ function toNativeClipSpec(spec: ClipSpec): NativeClipSpec {
     })),
     xml: spec.xml?.map((item) => ({
       data: Buffer.from(item.data),
-      schemeId: item.schemeId ? Buffer.from(item.schemeId) : undefined,
+      schemeId:
+        typeof item.schemeId === "string"
+          ? item.schemeId
+          : item.schemeId
+            ? Buffer.from(item.schemeId)
+            : undefined,
       language: item.language,
       namespace: item.namespace,
       mimeType: item.mimeType,
       isXml: item.isXml ?? true,
+      textEncoding: item.textEncoding,
     })),
     startTimecode: spec.startTimecode
       ? {
@@ -368,14 +436,21 @@ export class Clip {
 
   public get xml(): Promise<readonly XmlMetadata[]> {
     return this.native.xml().then((items) =>
-      items.map((item) => ({
-        data: Uint8Array.from(item.data),
-        schemeId: item.schemeId ? Uint8Array.from(item.schemeId) : undefined,
-        language: item.language,
-        namespace: item.namespace,
-        mimeType: item.mimeType,
-        isXml: item.isXml,
-      })),
+      items.map((item) =>
+        attachXmlHelpers({
+          data: Uint8Array.from(item.data),
+          schemeId: item.schemeId
+            ? typeof item.schemeId === "string"
+              ? item.schemeId
+              : Uint8Array.from(item.schemeId)
+            : undefined,
+          language: item.language,
+          namespace: item.namespace,
+          mimeType: item.mimeType,
+          isXml: item.isXml,
+          textEncoding: item.textEncoding as TextEncoding | undefined,
+        }),
+      ),
     );
   }
 

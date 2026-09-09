@@ -57,11 +57,12 @@ export interface NativeFrame {
 }
 export interface NativeXmlMetadata {
   data: Buffer
-  schemeId?: Buffer
+  schemeId?: Buffer | string
   language?: string
   namespace?: string
   mimeType?: string
-  isXml: boolean
+  isXml?: boolean
+  textEncoding?: number
 }
 export interface NativePackage {
   frames: Array<NativeFrame>
@@ -124,6 +125,7 @@ export interface NativeIdentity {
   fileSourcePackageUid?: Buffer
 }
 export declare function writeMxfToPath(path: string, spec: NativeClipSpec): Promise<NativeWriter>
+export declare function schemeFromName(name: string): Buffer
 export declare class NativeClip {
   info(): Promise<NativeClipInfo>
   select(indexes: Array<number>): Promise<void>

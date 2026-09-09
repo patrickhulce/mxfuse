@@ -310,10 +310,11 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { NativeClip, openMxfFromBuffer, openMxfFromPath, NativeWriter, writeMxfToPath } = nativeBinding
+const { NativeClip, openMxfFromBuffer, openMxfFromPath, NativeWriter, writeMxfToPath, schemeFromName } = nativeBinding
 
 module.exports.NativeClip = NativeClip
 module.exports.openMxfFromBuffer = openMxfFromBuffer
 module.exports.openMxfFromPath = openMxfFromPath
 module.exports.NativeWriter = NativeWriter
 module.exports.writeMxfToPath = writeMxfToPath
+module.exports.schemeFromName = schemeFromName

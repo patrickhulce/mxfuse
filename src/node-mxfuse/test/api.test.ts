@@ -5,7 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { EssenceType, Flavour, openMxf, writeMxf } from "../dist/index.js";
+import {
+  EssenceType,
+  Flavour,
+  XmlMetadata,
+  openMxf,
+  writeMxf,
+} from "../dist/index.js";
 
 const fixture = join(
   process.cwd(),
@@ -81,6 +87,7 @@ test("write round trip xml and opaque", async () => {
   const path = join(dir, "out.mxf");
   try {
     const xml = Buffer.from('<clip xmlns="urn:x-mxfuse:test">hello</clip>');
+    const urn = "urn:x-jxlmxf:exr-header-metadata:1";
     const writer = await writeMxf(path, {
       editRate: [24, 1],
       duration: 2,
@@ -97,7 +104,14 @@ test("write round trip xml and opaque", async () => {
           ),
         },
       ],
-      xml: [{ data: xml, language: "en", namespace: "urn:x-mxfuse:test" }],
+      xml: [
+        {
+          data: xml,
+          language: "en",
+          namespace: "urn:x-mxfuse:test",
+          schemeId: urn,
+        },
+      ],
     });
     await writer.write(0, Buffer.from("frame-a"));
     await writer.write(0, Buffer.from("frame-b"));
@@ -107,6 +121,14 @@ test("write round trip xml and opaque", async () => {
     const docs = await clip.xml;
     assert.equal(docs.length, 1);
     assert.deepEqual(docs[0].data, Uint8Array.from(xml));
+    assert.ok(docs[0].schemeId instanceof Uint8Array);
+    assert.equal((docs[0].schemeId as Uint8Array).byteLength, 16);
+    assert.ok(docs[0].matchesScheme?.(urn));
+    assert.equal(
+      docs[0].matchesScheme?.("urn:x-jxlmxf:singularity-metadata:1"),
+      false,
+    );
+    assert.ok(XmlMetadata.isSchemeMatch(urn, docs[0].schemeId));
     const info = await clip.info();
     await clip.select(info.tracks);
     await clip.seek(0);
