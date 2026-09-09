@@ -128,7 +128,7 @@ spec = ClipSpec(
             ),
         ),
     ],
-    xml=[XmlMetadata(data=b"<clip xmlns='urn:example'>hello</clip>")],
+    xml=[XmlMetadata(data=b"<clip xmlns='urn:example'>hello</clip>", scheme_id="urn:example:clip:1")],
 )
 
 with open("output.mxf", "wb") as f, write_mxf(f, spec) as clip:

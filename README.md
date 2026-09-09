@@ -227,7 +227,11 @@ writer.finish()?;
 `file_position` for frame-wrapped essence points at the KLV, with `kl_size`
 giving the header length. Clip-wrapped essence points at the sample data and
 `kl_size` is 0. Clip-level XML (ST 434 / generic stream) is `ClipSpec.xml` on
-write and `clip.xml` on read; it is not an essence track.
+write and `clip.xml` on read; it is not an essence track. `scheme_id=` is a URN or
+a 16-byte UL; on read it is always the stored UL. Identify clip XML with
+`matches_scheme("urn:...")` rather than sniffing the payload. UTF-8 payloads
+must not start with a BOM; inline vs Generic Stream wrapping follows the
+encoding detected from the bytes.
 
 ## Development
 
