@@ -31,6 +31,10 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v7
+      - name: Stamp versions from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 scripts/stamp-release-version.py "${GITHUB_REF_NAME#v}"
+        shell: bash
       - uses: dtolnay/rust-toolchain@stable
       - run: chmod +x scripts/sync-package-licenses.sh && ./scripts/sync-package-licenses.sh
         shell: bash
@@ -56,6 +60,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - name: Stamp versions from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 scripts/stamp-release-version.py "${GITHUB_REF_NAME#v}"
       - uses: dtolnay/rust-toolchain@stable
       - name: Materialize generated/bmx
         run: cargo build -p mxfuse-sys
@@ -149,6 +156,9 @@ jobs:
           ls -lh src/node-mxfuse/*.node
       - working-directory: src/node-mxfuse
         run: pnpm run build:ts
+      - name: Stamp versions from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 scripts/stamp-release-version.py "${GITHUB_REF_NAME#v}"
       - run: chmod +x scripts/sync-package-licenses.sh scripts/check-napi-artifacts.sh
       - run: ./scripts/sync-package-licenses.sh
       - run: ./scripts/check-napi-artifacts.sh

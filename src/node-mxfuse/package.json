@@ -1,6 +1,6 @@
 {
   "name": "mxfuse",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "Read and write MXF files through a statically linked bmx core",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
