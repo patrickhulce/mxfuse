@@ -94,6 +94,7 @@ pub struct NativeClipInfo {
     pub duration: i64,
     pub tracks: Vec<NativeTrack>,
     pub start_timecode: Option<NativeTimecode>,
+    pub clip_name: Option<String>,
 }
 
 struct BufferSource {
@@ -157,6 +158,7 @@ impl NativeClip {
                     frame: i32::from(tc.frame),
                     drop_frame: tc.drop_frame,
                 }),
+                clip_name: clip.name().map(str::to_owned),
             })
         })
         .await
@@ -353,6 +355,7 @@ pub struct NativeClipSpec {
     pub timecode_track: Option<bool>,
     pub system_item: Option<bool>,
     pub identity: Option<NativeIdentity>,
+    pub clip_name: Option<String>,
 }
 
 #[napi(object)]
@@ -484,6 +487,7 @@ fn clip_spec_from_native(spec: NativeClipSpec) -> napi::Result<ClipSpec> {
         timecode_track: spec.timecode_track.unwrap_or(true),
         system_item: spec.system_item.unwrap_or(false),
         identity: spec.identity.map(identity_from_native).transpose()?,
+        clip_name: spec.clip_name.filter(|name| !name.is_empty()),
     })
 }
 

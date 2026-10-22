@@ -430,6 +430,8 @@ pub struct ClipSpec {
     pub timecode_track: bool,
     pub system_item: bool,
     pub identity: Option<Identity>,
+    /// MaterialPackage name (the clip name). Empty or `None` leaves it unset.
+    pub clip_name: Option<String>,
 }
 
 impl Default for ClipSpec {
@@ -444,6 +446,7 @@ impl Default for ClipSpec {
             timecode_track: true,
             system_item: false,
             identity: None,
+            clip_name: None,
         }
     }
 }

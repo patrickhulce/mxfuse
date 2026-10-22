@@ -16,6 +16,7 @@ pub const MXFUSE_XML_MIME_LEN: usize = 64;
 pub const MXFUSE_XML_NS_LEN: usize = 128;
 pub const MXFUSE_NAME_LEN: usize = 64;
 pub const MXFUSE_VERSION_LEN: usize = 64;
+pub const MXFUSE_CLIP_NAME_LEN: usize = 256;
 pub const MXFUSE_PIXEL_LAYOUT_LEN: usize = 16;
 
 pub const MXFUSE_TEXT_UNKNOWN: c_int = 0;
@@ -86,6 +87,7 @@ pub const MXFUSE_CLIP_HAS_CREATION_DATE: u32 = 1 << 8;
 pub const MXFUSE_CLIP_HAS_GENERATION_UID: u32 = 1 << 9;
 pub const MXFUSE_CLIP_HAS_MATERIAL_UID: u32 = 1 << 10;
 pub const MXFUSE_CLIP_HAS_FILE_SOURCE_UID: u32 = 1 << 11;
+pub const MXFUSE_CLIP_HAS_CLIP_NAME: u32 = 1 << 12;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -179,6 +181,7 @@ pub struct MxfuseClipOptions {
     pub generation_uid: [u8; MXFUSE_UL_LEN],
     pub material_package_uid: [u8; MXFUSE_UMID_LEN],
     pub file_source_package_uid: [u8; MXFUSE_UMID_LEN],
+    pub clip_name: [c_char; MXFUSE_CLIP_NAME_LEN],
 }
 
 impl Default for MxfuseClipOptions {
@@ -203,6 +206,7 @@ impl Default for MxfuseClipOptions {
             generation_uid: [0; MXFUSE_UL_LEN],
             material_package_uid: [0; MXFUSE_UMID_LEN],
             file_source_package_uid: [0; MXFUSE_UMID_LEN],
+            clip_name: [0; MXFUSE_CLIP_NAME_LEN],
         }
     }
 }
@@ -220,13 +224,27 @@ pub struct MxfuseRational {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct MxfuseClipInfo {
     pub edit_rate: MxfuseRational,
     pub duration: i64,
     pub num_tracks: usize,
     pub has_start_timecode: c_int,
     pub start_timecode: MxfuseTimecode,
+    pub clip_name: [c_char; MXFUSE_CLIP_NAME_LEN],
+}
+
+impl Default for MxfuseClipInfo {
+    fn default() -> Self {
+        Self {
+            edit_rate: MxfuseRational::default(),
+            duration: 0,
+            num_tracks: 0,
+            has_start_timecode: 0,
+            start_timecode: MxfuseTimecode::default(),
+            clip_name: [0; MXFUSE_CLIP_NAME_LEN],
+        }
+    }
 }
 
 #[repr(C)]
