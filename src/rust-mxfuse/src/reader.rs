@@ -116,6 +116,7 @@ pub struct Clip {
     edit_rate: Rational,
     duration: i64,
     start_timecode: Option<Timecode>,
+    name: Option<String>,
     xml: Vec<XmlMetadata>,
 }
 
@@ -132,6 +133,11 @@ impl Clip {
 
     pub fn start_timecode(&self) -> Option<Timecode> {
         self.start_timecode
+    }
+
+    /// MaterialPackage name (the clip name), if one is set.
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 
     pub fn tracks(&self) -> &[Track] {
@@ -282,8 +288,23 @@ pub fn open_mxf<S: ByteSource + 'static>(source: S, options: ReadOptions) -> Res
         } else {
             None
         },
+        name: clip_name_from_info(&info),
         xml,
     })
+}
+
+fn clip_name_from_info(info: &MxfuseClipInfo) -> Option<String> {
+    let bytes: Vec<u8> = info
+        .clip_name
+        .iter()
+        .take_while(|byte| **byte != 0)
+        .map(|byte| *byte as u8)
+        .collect();
+    if bytes.is_empty() {
+        None
+    } else {
+        Some(String::from_utf8_lossy(&bytes).into_owned())
+    }
 }
 
 fn optional_ul(bytes: &[u8; 16]) -> Option<[u8; 16]> {

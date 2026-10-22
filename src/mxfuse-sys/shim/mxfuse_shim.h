@@ -20,6 +20,7 @@ extern "C" {
 #define MXFUSE_XML_MIME_LEN 64
 #define MXFUSE_XML_NS_LEN 128
 #define MXFUSE_NAME_LEN 64
+#define MXFUSE_CLIP_NAME_LEN 256
 #define MXFUSE_VERSION_LEN 64
 #define MXFUSE_PIXEL_LAYOUT_LEN 16
 
@@ -66,6 +67,7 @@ extern "C" {
 #define MXFUSE_CLIP_HAS_GENERATION_UID      (1u << 9)
 #define MXFUSE_CLIP_HAS_MATERIAL_UID        (1u << 10)
 #define MXFUSE_CLIP_HAS_FILE_SOURCE_UID     (1u << 11)
+#define MXFUSE_CLIP_HAS_CLIP_NAME           (1u << 12)
 
 typedef struct MxfuseError {
     char message[MXFUSE_ERROR_LEN];
@@ -103,6 +105,7 @@ typedef struct MxfuseClipInfo {
     size_t num_tracks;
     int has_start_timecode;
     MxfuseTimecode start_timecode;
+    char clip_name[MXFUSE_CLIP_NAME_LEN];
 } MxfuseClipInfo;
 
 typedef struct MxfuseTrackInfo {
@@ -202,6 +205,7 @@ typedef struct MxfuseClipOptions {
     uint8_t generation_uid[MXFUSE_UL_LEN];
     uint8_t material_package_uid[MXFUSE_UMID_LEN];
     uint8_t file_source_package_uid[MXFUSE_UMID_LEN];
+    char clip_name[MXFUSE_CLIP_NAME_LEN];
 } MxfuseClipOptions;
 
 int mxfuse_reader_open(

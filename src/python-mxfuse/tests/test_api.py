@@ -152,6 +152,26 @@ def test_write_round_trip_unc_and_pcm() -> None:
         assert packages[0].frame(1).data == audio
 
 
+def test_clip_name_round_trip() -> None:
+    def written(clip_name: str | None) -> bytes:
+        sink = BytesIO()
+        spec = ClipSpec(
+            edit_rate=(25, 1),
+            flavour=Flavour.DEFAULT,
+            duration=1,
+            tracks=[TrackSpec(EssenceType.UNC_HD_1080P)],
+            clip_name=clip_name,
+        )
+        with write_mxf(sink, spec) as clip:
+            clip.write(0, bytes([0x11]) * (1920 * 1080 * 2))
+        return sink.getvalue()
+
+    with open_mxf(BytesIO(written("shot_001 fixed_p0_rgc_grain"))) as clip:
+        assert clip.name == "shot_001 fixed_p0_rgc_grain"
+    with open_mxf(BytesIO(written(None))) as clip:
+        assert clip.name is None
+
+
 def test_write_round_trip_xml_and_opaque() -> None:
     container = bytes.fromhex("060e2b34040101010d010301027f0101")
     coding = "060e2b3404010101040102017f000000"

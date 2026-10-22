@@ -424,6 +424,9 @@ int mxfuse_reader_clip_info(MxfuseReader *reader, MxfuseClipInfo *out, MxfuseErr
         out->num_tracks = reader->reader->GetNumTrackReaders();
         out->has_start_timecode = 0;
         std::memset(&out->start_timecode, 0, sizeof(out->start_timecode));
+        std::memset(out->clip_name, 0, sizeof(out->clip_name));
+        std::strncpy(out->clip_name, reader->reader->GetMaterialPackageName().c_str(),
+                     MXFUSE_CLIP_NAME_LEN - 1);
         if (reader->reader->HaveMaterialTimecode()) {
             bmx::Timecode tc = reader->reader->GetMaterialTimecode(0);
             if (!tc.IsInvalid()) {
@@ -936,6 +939,10 @@ int mxfuse_writer_configure(
         }
         if (options->flags & MXFUSE_CLIP_HAS_SYSTEM_ITEM) {
             op1a->SetAddSystemItem(options->system_item != 0);
+        }
+        if (options->flags & MXFUSE_CLIP_HAS_CLIP_NAME) {
+            writer->clip->SetClipName(std::string(
+                options->clip_name, strnlen(options->clip_name, MXFUSE_CLIP_NAME_LEN)));
         }
         bool have_product = (options->flags & (
             MXFUSE_CLIP_HAS_COMPANY |

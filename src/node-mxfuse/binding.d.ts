@@ -73,6 +73,7 @@ export interface NativeClipInfo {
   duration: number
   tracks: Array<NativeTrack>
   startTimecode?: NativeTimecode
+  clipName?: string
 }
 export declare function openMxfFromBuffer(data: Buffer, options?: NativeReadOptions | undefined | null): Promise<NativeClip>
 export declare function openMxfFromPath(path: string, options?: NativeReadOptions | undefined | null): Promise<NativeClip>
@@ -112,6 +113,7 @@ export interface NativeClipSpec {
   timecodeTrack?: boolean
   systemItem?: boolean
   identity?: NativeIdentity
+  clipName?: string
 }
 export interface NativeIdentity {
   companyName?: string

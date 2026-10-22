@@ -538,6 +538,52 @@ fn start_timecode_and_identity_round_trip() {
 }
 
 #[test]
+fn clip_name_round_trips() {
+    let _guard = exclusive_write();
+    let named = ClipSpec {
+        clip_name: Some("shot_001 fixed_p0_rgc_grain".to_string()),
+        ..stock_spec(1, Flavour::DEFAULT)
+    };
+    let unnamed = stock_spec(1, Flavour::DEFAULT);
+    for (spec, expected) in [
+        (named, Some("shot_001 fixed_p0_rgc_grain")),
+        (unnamed, None),
+    ] {
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(Cursor::new(Vec::new())));
+        struct SharedSink(std::sync::Arc<std::sync::Mutex<Cursor<Vec<u8>>>>);
+        impl ByteSink for SharedSink {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                std::io::Write::write(&mut *self.0.lock().unwrap(), buf)
+            }
+            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+                std::io::Seek::seek(&mut *self.0.lock().unwrap(), pos)
+            }
+            fn tell(&mut self) -> io::Result<u64> {
+                Ok(self.0.lock().unwrap().position())
+            }
+        }
+        let mut writer = write_mxf(SharedSink(shared.clone()), spec).unwrap();
+        writer.write(0, &unc_frame(0x11)).unwrap();
+        writer.write(1, &pcm_edit_unit(0x33)).unwrap();
+        writer.finish().unwrap();
+        let bytes = shared.lock().unwrap().get_ref().clone();
+        let clip = open_mxf(Cursor::new(bytes), ReadOptions::default()).unwrap();
+        assert_eq!(clip.name(), expected);
+    }
+}
+
+#[test]
+fn clip_name_too_long_is_rejected() {
+    let _guard = exclusive_write();
+    let spec = ClipSpec {
+        clip_name: Some("x".repeat(256)),
+        ..stock_spec(1, Flavour::DEFAULT)
+    };
+    let result = write_mxf(Cursor::new(Vec::new()), spec);
+    assert!(result.is_err());
+}
+
+#[test]
 fn xml_scheme_round_trips_and_rejects_bad_payloads() {
     let _guard = exclusive_write();
     let container = [

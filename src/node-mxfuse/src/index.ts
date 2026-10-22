@@ -197,6 +197,7 @@ export interface ClipSpec {
   timecodeTrack?: boolean;
   systemItem?: boolean;
   identity?: Identity;
+  clipName?: string;
 }
 
 export interface Track {
@@ -315,6 +316,7 @@ function toNativeClipSpec(spec: ClipSpec): NativeClipSpec {
       : undefined,
     timecodeTrack: spec.timecodeTrack,
     systemItem: spec.systemItem,
+    clipName: spec.clipName,
     identity: spec.identity
       ? {
           companyName: spec.identity.companyName,
@@ -354,12 +356,14 @@ export class Clip {
     editRate: readonly [number, number];
     duration: number;
     startTimecode?: Timecode;
+    clipName?: string;
     tracks: readonly Track[];
   }> {
     const info = await this.native.info();
     return {
       editRate: [info.editRateNum, info.editRateDen],
       duration: info.duration,
+      clipName: info.clipName,
       startTimecode: info.startTimecode
         ? {
             hour: info.startTimecode.hour,

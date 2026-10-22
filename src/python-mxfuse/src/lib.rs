@@ -122,6 +122,11 @@ impl PyClip {
     }
 
     #[getter]
+    fn name(&mut self) -> PyResult<Option<String>> {
+        Ok(self.clip()?.name().map(str::to_owned))
+    }
+
+    #[getter]
     fn start_timecode(&mut self) -> PyResult<Option<PyTimecode>> {
         Ok(self.clip()?.start_timecode().map(|tc| PyTimecode {
             hour: tc.hour,
@@ -590,6 +595,10 @@ fn clip_spec_from_py(py: Python<'_>, spec: Bound<'_, PyAny>) -> PyResult<ClipSpe
         Ok(value) if !value.is_none() => Some(identity_from_py(&value)?),
         _ => None,
     };
+    let clip_name = match spec.getattr("clip_name") {
+        Ok(value) if !value.is_none() => Some(value.extract::<String>()?),
+        _ => None,
+    };
     let _ = py;
     Ok(ClipSpec {
         edit_rate: Rational {
@@ -604,6 +613,7 @@ fn clip_spec_from_py(py: Python<'_>, spec: Bound<'_, PyAny>) -> PyResult<ClipSpe
         timecode_track,
         system_item,
         identity,
+        clip_name,
     })
 }
 

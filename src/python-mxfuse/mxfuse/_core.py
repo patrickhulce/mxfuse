@@ -233,6 +233,7 @@ class ClipSpec:
     timecode_track: bool = True
     system_item: bool = False
     identity: Identity | None = None
+    clip_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,6 +383,12 @@ class Clip:
     def duration(self) -> int:
         duration: int = self._native.duration
         return duration
+
+    @property
+    def name(self) -> str | None:
+        """MaterialPackage name (the clip name), or None when unset."""
+        value: str | None = self._native.name
+        return value
 
     @property
     def start_timecode(self) -> Timecode | None:
