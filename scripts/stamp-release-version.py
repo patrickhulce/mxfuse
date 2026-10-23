@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Stamp published package versions to match a release tag."""
+"""Stamp published package versions to match a release tag.
+
+Checked-in source is always ``0.0.0-dev``: that string is valid Cargo semver,
+npm semver, and PEP 440 (normalized to ``0.0.0.dev0``). ``0.0.0.dev0`` itself
+is not a legal Cargo or npm version. Release jobs pass the tag (``v1.2.3``)
+to replace the placeholder before they build or publish.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +15,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.]+)?$")
+DEV_VERSION = "0.0.0-dev"
+RELEASE_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 WORKSPACE_PACKAGES = (
     "mxfuse",
     "mxfuse-sys",
@@ -37,14 +44,7 @@ def stamp_cargo_lock(path: Path, version: str) -> None:
     path.write_text(text)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("version", help="version without a leading v, e.g. 0.1.3")
-    args = parser.parse_args()
-    version = args.version.removeprefix("v")
-    if not VERSION_RE.fullmatch(version):
-        raise SystemExit(f"invalid version: {args.version}")
-
+def stamp(version: str) -> None:
     replace_once(
         ROOT / "Cargo.toml",
         r'(?m)^(\[workspace\.package\]\n(?:(?!\[).)*?^version = ")[^"]+(")',
@@ -52,6 +52,11 @@ def main() -> int:
         flags=re.DOTALL,
     )
     stamp_cargo_lock(ROOT / "Cargo.lock", version)
+    replace_once(
+        ROOT / "src/rust-mxfuse/Cargo.toml",
+        r'(mxfuse-sys = \{ path = "\.\./mxfuse-sys", version = ")[^"]+(")',
+        rf"\g<1>{version}\2",
+    )
     replace_once(
         ROOT / "src/python-mxfuse/pyproject.toml",
         r'(?m)^(version = ")[^"]+(")',
@@ -73,6 +78,32 @@ def main() -> int:
         rf"\g<1>{version}\2",
     )
     print(f"stamped {version}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "version",
+        nargs="?",
+        help="release version without a leading v, e.g. 0.1.3",
+    )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help=f"restore the source placeholder ({DEV_VERSION})",
+    )
+    args = parser.parse_args()
+    if args.dev:
+        if args.version:
+            raise SystemExit("pass a version or --dev, not both")
+        stamp(DEV_VERSION)
+        return 0
+    if not args.version:
+        raise SystemExit("pass a version or --dev")
+    version = args.version.removeprefix("v")
+    if not RELEASE_VERSION_RE.fullmatch(version):
+        raise SystemExit(f"invalid release version: {args.version}")
+    stamp(version)
     return 0
 
 

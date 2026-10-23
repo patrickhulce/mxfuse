@@ -12,7 +12,8 @@ default-members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.3"
+# Source tree is always 0.0.0-dev (valid Cargo, npm, and PEP 440). Tags stamp it.
+version = "0.0.0-dev"
 edition = "2021"
 license = "MIT"
 authors = ["mxfuse contributors"]

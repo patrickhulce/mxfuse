@@ -1,7 +1,7 @@
 {
   "name": "mxfuse-root",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.0.0-dev",
   "description": "Polyglot bindings for mxfuse",
   "license": "MIT",
   "scripts": {
