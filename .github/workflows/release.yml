@@ -177,7 +177,14 @@ jobs:
       - name: Publish npm package
         if: startsWith(github.ref, 'refs/tags/v')
         working-directory: src/node-mxfuse
-        run: npm publish --access public
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "$name@$version already published; skipping"
+          else
+            npm publish --access public
+          fi
 
   pypi:
     needs: [python-wheels, python-sdist]
@@ -215,9 +222,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+      # npm-package duplicates the napi-* .node files; skip it so asset names stay unique.
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
+          pattern: "{wheels-*,sdist,napi-*}"
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
